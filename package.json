@@ -1,0 +1,23 @@
+{
+  "name": "com.rayforge.urp",
+  "version": "1.0.0",
+  "displayName": "Rayforge URP Library",
+  "description": "URP-specific features and utilities for Rayforge Core Library.",
+  "unity": "6000.0",
+  "unityRelease": "58f2",
+  "keywords": [
+    "rayforge",
+    "urp",
+    "rendering",
+    "library"
+  ],
+  "author": {
+    "name": "Rayforge",
+    "email": "info@rayforge.eu",
+    "url": "http://rayforge.eu/"
+  },
+  "dependencies": {
+    "com.rayforge.core": "1.0.0",
+    "com.unity.render-pipelines.universal": "17.0.4"
+  }
+}
