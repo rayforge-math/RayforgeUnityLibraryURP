@@ -50,6 +50,21 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
             }
         }
 
+        /// <summary>
+        /// Data passed to render ggraph backend to set depthbuffer as global texture under an alternative name.
+        /// </summary>
+        private class DepthMip0PassData
+        {
+            /// <summary>Texel size of the input mip.</summary>
+            public Vector4 texelSize;
+
+            /// <summary>Shader property IDs for the depth buffer / mip 0.</summary>
+            public TextureIds shaderIDs;
+
+            /// <summary>Texture handle for the depth buffer / mip 0.</summary>
+            public TextureHandle handle;
+        }
+
         private const string kKernelName = "DownsampleHighZ";
         private static readonly int kSourceId = Shader.PropertyToID("_Source");
         private static readonly int kDestId = Shader.PropertyToID("_Dest");
@@ -93,7 +108,7 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
 
             m_DepthPyramidDescriptor = DefaultDescriptors.DepthBufferFullScreen();
             m_DepthPyramidHandles = new RTHandleMipChain((ref RTHandle handle, RenderTextureDescriptor desc, int mip) =>
-                RenderingUtils.ReAllocateHandleIfNeeded(ref handle, desc)
+                RenderingUtils.ReAllocateHandleIfNeeded(ref handle, desc, FilterMode.Point, TextureWrapMode.Clamp)
             );
         }
 
@@ -162,6 +177,26 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
             var camera = cameraData.camera;
             var baseRes = new Vector2Int(camera.pixelWidth, camera.pixelHeight);
             CheckAndUpdateTextures(baseRes);
+
+            // expose depth buffer as mip 0, just for convenience. Basically the same as _CameraDepthTexture.
+            if (DepthPyramidGlobals.Ids.Length > 0)
+            {
+                using(var builder = renderGraph.AddUnsafePass("depth mip 0 pass", out DepthMip0PassData data))
+                {
+                    var mip0Ids = DepthPyramidGlobals.GetMipIds(0);
+                    Vector4 texelSize0 = new Vector4(1f / baseRes.x, 1f / baseRes.y, baseRes.x, baseRes.y);
+
+                    data.texelSize = texelSize0;
+                    data.shaderIDs = mip0Ids;
+                    data.handle = srcDepthBuffer;
+
+                    builder.SetRenderFunc(static (DepthMip0PassData data, UnsafeGraphContext ctx) =>
+                    {
+                        ctx.cmd.SetGlobalTexture(data.shaderIDs.texture, data.handle);
+                        ctx.cmd.SetGlobalVector(data.shaderIDs.texelSize, data.texelSize);
+                    });
+                }
+            }
 
             TextureHandle prevMip = srcDepthBuffer;
 
