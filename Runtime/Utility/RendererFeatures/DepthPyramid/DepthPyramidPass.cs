@@ -78,7 +78,7 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
         /// Gets or sets the number of mip levels for the pyramid (including mip 0).
         /// Setting clamps the value between 1 and MipCountMax.
         /// </summary>
-        public int MipCount
+        private int MipCount
         {
             get => m_DownsampleMipCount + 1;
             set => m_DownsampleMipCount = Mathf.Clamp(value - 1, 0, MipCountMax - 1);
@@ -117,7 +117,7 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
 
         /// <summary>Updates the mip count at runtime.</summary>
         /// <param name="mipCount">Number of mip levels including mip 0.</param>
-        public void UpdateMipCount(int mipCount) => MipCount = mipCount;
+        internal void UpdateMipCount(int mipCount) => MipCount = mipCount;
 
 #if UNITY_EDITOR
         /// <summary>Updates editor debug visualization settings.</summary>

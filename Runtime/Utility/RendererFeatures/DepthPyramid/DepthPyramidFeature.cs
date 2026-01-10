@@ -53,7 +53,17 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
         /// </summary>
         [Range(1, MipCountMax), SerializeField, InspectorName("Mip Count")]
         [Tooltip("Number of mip levels to generate for the depth pyramid (1 = full resolution only).")]
-        public int m_MipCount = 8;
+        private int m_MipCount = 8;
+
+        /// <summary>
+        /// Number of mip levels to generate for the depth pyramid.
+        /// Must be between 1 and <see cref="MipCountMax"/>.
+        /// </summary>
+        public int MipCount
+        {
+            get => m_MipCount;
+            private set => m_MipCount = Math.Clamp(mipLevel, 1, MipCountMax);
+        }
 
 #if UNITY_EDITOR
         [Header("Debug")]
@@ -76,7 +86,7 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
 #if UNITY_EDITOR
         public void OnValidate()
         {
-            mipLevel = Math.Clamp(mipLevel, 0, m_MipCount - 1);
+            mipLevel = Math.Clamp(mipLevel, 0, MipCount - 1);
         }
 #endif
 
@@ -99,6 +109,24 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
                 m_InjectionPoint = value;
                 if (m_RenderPass != null)
                     m_RenderPass.renderPassEvent = m_InjectionPoint;
+            }
+        }
+
+        /// <summary>
+        /// Ensures that the depth pyramid feature will generate at least the requested number of mip levels.
+        /// Updates the <see cref="MipCount"/> slider.  
+        /// By default, it will only increase the mip count; pass <paramref name="force"/> = true to also allow decreasing it.
+        /// </summary>
+        /// <param name="requestedMipCount">Number of mip levels including Mip0.</param>
+        /// <param name="force">
+        /// If true, the <see cref="MipCount"/> will be set exactly to <paramref name="requestedMipCount"/>,
+        /// otherwise it will only increase if the current value is smaller.
+        /// </param>
+        public void EnsureMipCount(int requestedMipCount, bool force = false)
+        {
+            if (force || requestedMipCount > MipCount)
+            {
+                MipCount = requestedMipCount;
             }
         }
 
