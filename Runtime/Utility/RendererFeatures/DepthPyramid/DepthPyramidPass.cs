@@ -177,7 +177,7 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
             var camera = cameraData.camera;
             var baseRes = new Vector2Int(camera.pixelWidth, camera.pixelHeight);
             CheckAndUpdateTextures(baseRes);
-            /*
+            
             // expose depth buffer as mip 0, just for convenience. Basically the same as _CameraDepthTexture.
             if (DepthPyramidGlobals.Ids.Length > 0)
             {
@@ -196,7 +196,7 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
                         ctx.cmd.SetGlobalVector(data.shaderIDs.texelSize, data.texelSize);
                     });
                 }
-            }*/
+            }
 
             TextureHandle prevMip = srcDepthBuffer;
 
