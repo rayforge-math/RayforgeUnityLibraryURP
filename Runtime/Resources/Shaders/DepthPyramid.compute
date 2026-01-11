@@ -47,7 +47,7 @@ cbuffer _DownsampleHighZParams
 [numthreads(8, 8, 1)]
 void DownsampleHighZ(uint3 id : SV_DispatchThreadID)
 {
-    if (id.x < _DestRes.x || id.y < _DestRes.y)
+    if (_DestRes.x <= id.x || _DestRes.y <= id.y)
         return;
 
     uint2 base = id.xy * 2;

@@ -1,4 +1,5 @@
 ﻿using Rayforge.Core.Common;
+using Rayforge.Core.Rendering.Collections.Helpers;
 using Rayforge.Core.Rendering.Passes;
 using System;
 using UnityEngine;
@@ -6,74 +7,117 @@ using UnityEngine;
 namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
 {
     /// <summary>
-    /// Generates and stores shader property IDs for each mip level of the depth pyramid.
-    /// Provides convenience accessors for individual mips.
+    /// Represents all relevant data for a single mip level of the depth pyramid.
+    /// This struct is immutable from outside to prevent accidental modification.
+    /// </summary>
+    public readonly struct DepthPyramidMip
+    {
+        /// <summary>
+        /// Shader property IDs for this mip level (texture + texelSize).
+        /// </summary>
+        public readonly TextureIds Ids;
+
+        /// <summary>
+        /// Human-readable name for this mip level (for debug / MaterialPropertyBlock).
+        /// </summary>
+        public readonly string Name;
+
+        /// <summary>
+        /// Texel size vector for this mip level.
+        /// x = 1/width, y = 1/height, z = width, w = height.
+        /// </summary>
+        public readonly Vector4 TexelSize;
+
+        internal DepthPyramidMip(TextureIds ids, string name, Vector4 texelSize)
+        {
+            Ids = ids;
+            Name = name;
+            TexelSize = texelSize;
+        }
+    }
+
+    /// <summary>
+    /// Manages shader property IDs, names, and texel sizes for all mips of a depth pyramid.
+    /// Safe: All data is private, arrays are only resized when needed, and values cannot be modified externally.
     /// </summary>
     public static class DepthPyramidGlobals
     {
         private const string k_BaseName = "_" + Globals.CompanyName + "_DepthPyramidMip";
 
         /// <summary>
-        /// Shader property IDs for each mip level texture.
+        /// Internal array storing all mip data together.
         /// </summary>
-        public static TextureIds[] Ids { get; private set; } = Array.Empty<TextureIds>();
+        private static DepthPyramidMip[] s_Mips = Array.Empty<DepthPyramidMip>();
 
         /// <summary>
-        /// Raw names for each mip level (e.g., for debug or MaterialPropertyBlock).
+        /// Generates or updates shader IDs, names, and texel sizes for the depth pyramid mips.
+        /// Should be called once per resolution change.
         /// </summary>
-        public static string[] Names { get; private set; } = Array.Empty<string>();
-
-        /// <summary>
-        /// Generates IDs and names for the specified number of mips.
-        /// Only callable internally by the framework.
-        /// </summary>
-        /// <param name="mipCount">Number of mips, including mip 0.</param>
-        internal static void Generate(int mipCount)
+        /// <param name="mipCount">Number of mip levels including mip 0.</param>
+        /// <param name="baseRes">Base resolution (camera or input texture).</param>
+        internal static void Generate(int mipCount, Vector2Int baseRes)
         {
             mipCount = Mathf.Clamp(mipCount, 1, DepthPyramidPass.MipCountMax);
 
-            Ids = new TextureIds[mipCount];
-            Names = new string[mipCount];
+            if (s_Mips.Length != mipCount)
+            {
+                var newMips = new DepthPyramidMip[mipCount];
+                int copyCount = Math.Min(s_Mips.Length, mipCount);
+                if (copyCount > 0)
+                {
+                    Array.Copy(s_Mips, newMips, copyCount);
+                }
+                s_Mips = newMips;
+            }
 
             for (int i = 0; i < mipCount; i++)
             {
                 string name = $"{k_BaseName}{i}";
                 string texelName = $"{name}_TexelSize";
 
-                Ids[i] = new TextureIds
+                Vector2Int mipRes = GetMipResolution(i, baseRes);
+                Vector4 texelSize = new Vector4(
+                    1f / mipRes.x,
+                    1f / mipRes.y,
+                    mipRes.x,
+                    mipRes.y
+                );
+
+                TextureIds ids = new TextureIds
                 {
                     texture = Shader.PropertyToID(name),
                     texelSize = Shader.PropertyToID(texelName)
                 };
 
-                Names[i] = name;
+                s_Mips[i] = new DepthPyramidMip(ids, name, texelSize);
             }
         }
 
         /// <summary>
-        /// Returns the shader property IDs for the specified mip level.
+        /// Returns the DepthPyramidMip struct for a given mip index.
         /// </summary>
         /// <param name="index">Mip index (0-based).</param>
-        /// <returns>TextureIds for the mip level.</returns>
-        public static TextureIds GetMipIds(int index)
+        /// <returns>Immutable DepthPyramidMip struct containing IDs, name, and texel size.</returns>
+        public static DepthPyramidMip GetMip(int index)
         {
-            if (Ids == null || index < 0 || index >= Ids.Length)
-                throw new ArgumentOutOfRangeException(nameof(index), $"Mip index {index} is out of range (0..{Ids.Length - 1})");
+            if (index < 0 || index >= s_Mips.Length)
+                throw new ArgumentOutOfRangeException(nameof(index), $"Mip index {index} is out of range (0..{s_Mips.Length - 1})");
 
-            return Ids[index];
+            return s_Mips[index];
         }
 
         /// <summary>
-        /// Returns the name of the specified mip level.
+        /// Returns the number of mip levels currently generated.
         /// </summary>
-        /// <param name="index">Mip index (0-based).</param>
-        /// <returns>Name string for the mip level.</returns>
-        public static string GetMipName(int index)
-        {
-            if (Names == null || index < 0 || index >= Names.Length)
-                throw new ArgumentOutOfRangeException(nameof(index), $"Mip index {index} is out of range (0..{Names.Length - 1})");
+        public static int Count => s_Mips.Length;
 
-            return Names[index];
-        }
+        /// <summary>
+        /// Computes the resolution of a specific mip level for a given base resolution.
+        /// </summary>
+        /// <param name="mipIndex">Mip index (0 = full resolution).</param>
+        /// <param name="baseRes">Base resolution (e.g., camera size).</param>
+        /// <returns>Resolution of the mip as Vector2Int.</returns>
+        public static Vector2Int GetMipResolution(int mipIndex, Vector2Int baseRes)
+            => MipChainHelpers.DefaultMipResolution(mipIndex, baseRes);
     }
 }

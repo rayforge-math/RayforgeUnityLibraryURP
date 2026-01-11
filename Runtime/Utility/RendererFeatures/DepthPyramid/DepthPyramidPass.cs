@@ -37,16 +37,12 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
             /// <summary>Resolution of the destination mip.</summary>
             public Vector2 destRes;
 
-            /// <summary>Shader property IDs for the current mip.</summary>
-            public TextureIds shaderIDs;
-
             /// <summary>Copies user data from another pass data instance.</summary>
             /// <param name="other">The source pass data to copy from.</param>
             public override void CopyUserData(DepthPyramidPassData other)
             {
                 sourceRes = other.sourceRes;
                 destRes = other.destRes;
-                shaderIDs = other.shaderIDs;
             }
         }
 
@@ -86,6 +82,7 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
 
         private readonly RTHandleMipChain m_DepthPyramidHandles;
         private RenderTextureDescriptor m_DepthPyramidDescriptor;
+        private Vector4[] m_TexelSizes = Array.Empty<Vector4>();
         private DepthPyramidPassData m_PassData = new DepthPyramidPassData();
         private ComputePassMeta m_PassMeta;
 
@@ -135,9 +132,14 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
         /// Generates shader IDs for all mips if required.
         /// </summary>
         /// <param name="baseRes">Base resolution of the camera.</param>
-        private void CheckAndUpdateTextures(Vector2Int baseRes)
+        /// <returns>
+        /// True if the resolution or mip count has changed and the RTHandles were updated, false otherwise.
+        /// </returns>
+        private bool CheckAndUpdateTextures(Vector2Int baseRes)
         {
             var resolution = MipChainHelpers.DefaultMipResolution(1, baseRes);
+
+            bool changed = false;
 
             if (m_LastResolution != resolution)
             {
@@ -146,6 +148,8 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
                 m_DepthPyramidDescriptor.colorFormat = RenderTextureFormat.RFloat;
                 m_DepthPyramidDescriptor.depthStencilFormat = UnityEngine.Experimental.Rendering.GraphicsFormat.None;
                 m_LastResolution = resolution;
+
+                changed = true;
             }
 
             if (m_DepthPyramidHandles.MipCount != m_DownsampleMipCount)
@@ -155,7 +159,41 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
                 else
                     m_DepthPyramidHandles.Resize(m_DownsampleMipCount);
 
-                DepthPyramidGlobals.Generate(MipCount);
+                changed = true;
+            }
+
+            if (changed)
+            {
+                DepthPyramidGlobals.Generate(MipCount, baseRes);
+            }
+
+            return changed;
+        }
+
+        /// <summary>
+        /// Binds all Depth Pyramid mip textures and texel sizes as global shader variables.
+        /// <para>
+        /// Uses the cached DepthPyramidGlobals for IDs and texel sizes, and RTHandleMipChain for the actual textures.
+        /// Mip 0 will be set from the source depth buffer; higher mips from the chain.
+        /// </para>
+        /// </summary>
+        /// <param name="depthPyramidHandles">The RTHandleMipChain containing the depth pyramid mips (excluding mip 0).</param>
+        /// <param name="sourceDepth">The original camera depth buffer (mip 0).</param>
+        private static void SetGlobalDepthPyramid(RTHandleMipChain depthPyramidHandles, RTHandle sourceDepth = null)
+        {
+            if (depthPyramidHandles == null) throw new ArgumentNullException(nameof(depthPyramidHandles));
+
+            for (int i = 0; i < DepthPyramidGlobals.Count; ++i)
+            {
+                var mip = DepthPyramidGlobals.GetMip(i);
+
+                Shader.SetGlobalVector(mip.Ids.texelSize, mip.TexelSize);
+
+                RTHandle handle = i == 0 ? sourceDepth : depthPyramidHandles[i - 1];
+                if (handle != null)
+                {
+                    Shader.SetGlobalTexture(mip.Ids.texture, handle);
+                }
             }
         }
 
@@ -176,60 +214,42 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
 
             var camera = cameraData.camera;
             var baseRes = new Vector2Int(camera.pixelWidth, camera.pixelHeight);
-            CheckAndUpdateTextures(baseRes);
-            
-            // expose depth buffer as mip 0, just for convenience. Basically the same as _CameraDepthTexture.
-            if (DepthPyramidGlobals.Ids.Length > 0)
+            if (CheckAndUpdateTextures(baseRes))
             {
-                using(var builder = renderGraph.AddUnsafePass("depth mip 0 pass", out DepthMip0PassData data))
-                {
-                    var mip0Ids = DepthPyramidGlobals.GetMipIds(0);
-                    Vector4 texelSize0 = new Vector4(1f / baseRes.x, 1f / baseRes.y, baseRes.x, baseRes.y);
-
-                    data.texelSize = texelSize0;
-                    data.shaderIDs = mip0Ids;
-                    data.handle = srcDepthBuffer;
-
-                    builder.SetRenderFunc(static (DepthMip0PassData data, UnsafeGraphContext ctx) =>
-                    {
-                        ctx.cmd.SetGlobalTexture(data.shaderIDs.texture, data.handle);
-                        ctx.cmd.SetGlobalVector(data.shaderIDs.texelSize, data.texelSize);
-                    });
-                }
+                SetGlobalDepthPyramid(m_DepthPyramidHandles);
             }
 
             TextureHandle prevMip = srcDepthBuffer;
+            Vector2 prevRes = baseRes;
 
             for (int i = 0; i < m_DepthPyramidHandles.MipCount; ++i)
             {
                 var curMip = m_DepthPyramidHandles[i].ToRenderGraphHandle(renderGraph);
                 if (!curMip.IsValid()) break;
 
-                Vector2Int prevRes = MipChainHelpers.DefaultMipResolution(i, baseRes);
-                Vector2Int curRes = MipChainHelpers.DefaultMipResolution(i + 1, baseRes);
+                var mipData = DepthPyramidGlobals.GetMip(i + 1);
+
+                Vector4 texelSize = mipData.TexelSize;
+                Vector2 curRes = new Vector2(texelSize.z, texelSize.w);
 
                 var passMeta = m_PassMeta;
                 passMeta.ThreadGroupsX = Mathf.CeilToInt(curRes.x / 8.0f);
                 passMeta.ThreadGroupsY = Mathf.CeilToInt(curRes.y / 8.0f);
 
-                m_PassData.SetInput(prevMip, kSourceId);
-                m_PassData.SetDestination(curMip, kDestId);
+                m_PassData.PushInput(prevMip, kSourceId);
+                m_PassData.PushDestination(curMip, kDestId);
                 m_PassData.sourceRes = prevRes;
                 m_PassData.destRes = curRes;
-                m_PassData.shaderIDs = DepthPyramidGlobals.Ids[i + 1];
                 m_PassData.PassMeta = passMeta;
-                m_PassData.UpdateCallback = static (cmd, data) =>
+                m_PassData.RenderFuncUpdate = static (cmd, data) =>
                 {
                     cmd.SetComputeVectorParam(data.PassMeta.Shader, kSourceResId, data.sourceRes);
                     cmd.SetComputeVectorParam(data.PassMeta.Shader, kDestResId, data.destRes);
-
-                    Vector4 texelSize = new Vector4(1.0f / data.destRes.x, 1.0f / data.destRes.y, data.destRes.x, data.destRes.y);
-                    cmd.SetGlobalTexture(data.shaderIDs.texture, data.Destination.handle);
-                    cmd.SetGlobalVector(data.shaderIDs.texelSize, texelSize);
                 };
 
                 RenderPassRecorder.AddComputePass(renderGraph, kKernelName, m_PassData);
                 prevMip = curMip;
+                prevRes = curRes;
             }
 
 #if UNITY_EDITOR
