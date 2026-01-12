@@ -3,16 +3,16 @@
 #define _TAA_MotionVectorTexture        _MotionVectorTexture
 #define sampler_TAA_MotionVectorTexture sampler_MotionVectorTexture
 
-#if !defined(_TaaJitter)
-#define _TAA_Jitter                 _TAA_Jitter
+#ifdef _TaaJitter
+    #define _TAA_Jitter _TaaJitter
 #else
-#define _TAA_Jitter                 _TaaJitter
+    #define _TAA_Jitter float2(0.0, 0.0)
 #endif
 
-#if !defined(_TaaJitterPrev)
-#define _TAA_JitterPrev             _TAA_JitterPrev
+#ifdef _TaaJitterPrev
+    #define _TAA_JitterPrev _TaaJitterPrev
 #else
-#define _TAA_JitterPrev             _TaaJitterPrev
+    #define _TAA_JitterPrev float2(0.0, 0.0)
 #endif
 
 #define _TAA_DepthTexture               _CameraDepthTexture
