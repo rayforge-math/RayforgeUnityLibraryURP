@@ -14,7 +14,7 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
         /// <summary>
         /// Maximum number of mip levels supported by the depth pyramid.
         /// </summary>
-        public const int MipCountMax = DepthPyramidPass.MipCountMax;
+        public const int MipCountMax = DepthPyramidGlobals.MipCountMax;
 
         /// <summary>
         /// Name of the shader used to generate the depth pyramid.
@@ -55,16 +55,6 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
         [Tooltip("Number of mip levels to generate for the depth pyramid (1 = full resolution only).")]
         private int m_MipCount = 8;
 
-        /// <summary>
-        /// Number of mip levels to generate for the depth pyramid.
-        /// Must be between 1 and <see cref="MipCountMax"/>.
-        /// </summary>
-        public int MipCount
-        {
-            get => m_MipCount;
-            private set => m_MipCount = Math.Clamp(mipLevel, 1, MipCountMax);
-        }
-
 #if UNITY_EDITOR
         [Header("Debug")]
 
@@ -86,7 +76,19 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
 #if UNITY_EDITOR
         public void OnValidate()
         {
-            mipLevel = Math.Clamp(mipLevel, 0, MipCount - 1);
+            if(DepthPyramidGlobals.MipCount != m_MipCount)
+            {
+                if (DepthPyramidGlobals.MipCountDirty)
+                {
+                    m_MipCount = DepthPyramidGlobals.MipCount;
+                }
+                else
+                {
+                    DepthPyramidGlobals.MipCount = m_MipCount;
+                }
+            }
+
+            mipLevel = Math.Clamp(mipLevel, 0, DepthPyramidGlobals.MipCount - 1);
         }
 #endif
 
@@ -109,24 +111,6 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
                 m_InjectionPoint = value;
                 if (m_RenderPass != null)
                     m_RenderPass.renderPassEvent = m_InjectionPoint;
-            }
-        }
-
-        /// <summary>
-        /// Ensures that the depth pyramid feature will generate at least the requested number of mip levels.
-        /// Updates the <see cref="MipCount"/> slider.  
-        /// By default, it will only increase the mip count; pass <paramref name="force"/> = true to also allow decreasing it.
-        /// </summary>
-        /// <param name="requestedMipCount">Number of mip levels including Mip0.</param>
-        /// <param name="force">
-        /// If true, the <see cref="MipCount"/> will be set exactly to <paramref name="requestedMipCount"/>,
-        /// otherwise it will only increase if the current value is smaller.
-        /// </param>
-        public void EnsureMipCount(int requestedMipCount, bool force = false)
-        {
-            if (force || requestedMipCount > MipCount)
-            {
-                MipCount = requestedMipCount;
             }
         }
 
@@ -173,7 +157,6 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
             if (renderingData.cameraData.cameraType == CameraType.Game)
             {
                 m_RenderPass.renderPassEvent = m_InjectionPoint;
-                m_RenderPass.UpdateMipCount(m_MipCount);
 
                 var passInput = k_PassInput;
 #if UNITY_EDITOR
