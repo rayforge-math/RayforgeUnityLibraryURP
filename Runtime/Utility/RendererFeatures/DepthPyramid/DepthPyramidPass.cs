@@ -100,7 +100,7 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
         internal void UpdateDebugSettings(bool show, int mipLevel)
         {
             m_Debug = show;
-            m_DebugMipLevel = Mathf.Clamp(mipLevel, 0, DepthPyramidGlobals.MipCountMax - 1);
+            m_DebugMipLevel = Mathf.Clamp(mipLevel, 0, DepthPyramidProvider.MipCountMax - 1);
         }
 #endif
 
@@ -129,7 +129,7 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
                 changed = true;
             }
 
-            var downsampleMipCount = Mathf.Clamp(DepthPyramidGlobals.MipCount - 1, 0, DepthPyramidGlobals.MipCountMax - 1);
+            var downsampleMipCount = Mathf.Clamp(DepthPyramidProvider.MipCount - 1, 0, DepthPyramidProvider.MipCountMax - 1);
             if (m_DepthPyramidHandles.MipCount != downsampleMipCount)
             {
                 if (downsampleMipCount > 0)
@@ -142,17 +142,17 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
 
             if (changed)
             {
-                DepthPyramidGlobals.Generate(baseRes);
+                DepthPyramidProvider.Generate(baseRes);
             }
 
-            DepthPyramidGlobals.ResetMipCountDirty();
+            DepthPyramidProvider.ResetMipCountDirty();
             return changed;
         }
 
         /// <summary>
         /// Binds all Depth Pyramid mip textures and texel sizes as global shader variables.
         /// <para>
-        /// Uses the cached DepthPyramidGlobals for IDs and texel sizes, and RTHandleMipChain for the actual textures.
+        /// Uses the cached DepthPyramidProvider for IDs and texel sizes, and RTHandleMipChain for the actual textures.
         /// Mip 0 will be set from the source depth buffer; higher mips from the chain.
         /// </para>
         /// </summary>
@@ -162,9 +162,9 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
         {
             if (depthPyramidHandles == null) throw new ArgumentNullException(nameof(depthPyramidHandles));
 
-            for (int i = 0; i < DepthPyramidGlobals.ActiveMipCount; ++i)
+            for (int i = 0; i < DepthPyramidProvider.ActiveMipCount; ++i)
             {
-                var mip = DepthPyramidGlobals.GetMip(i);
+                var mip = DepthPyramidProvider.GetMip(i);
 
                 Shader.SetGlobalVector(mip.Ids.texelSize, mip.TexelSize);
 
@@ -206,7 +206,7 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
                 var curMip = m_DepthPyramidHandles[i].ToRenderGraphHandle(renderGraph);
                 if (!curMip.IsValid()) break;
 
-                var mipData = DepthPyramidGlobals.GetMip(i + 1);
+                var mipData = DepthPyramidProvider.GetMip(i + 1);
 
                 Vector4 texelSize = mipData.TexelSize;
                 Vector2 curRes = new Vector2(texelSize.z, texelSize.w);

@@ -14,7 +14,7 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
         /// <summary>
         /// Maximum number of mip levels supported by the depth pyramid.
         /// </summary>
-        public const int MipCountMax = DepthPyramidGlobals.MipCountMax;
+        public const int MipCountMax = DepthPyramidProvider.MipCountMax;
 
         /// <summary>
         /// Name of the shader used to generate the depth pyramid.
@@ -76,19 +76,19 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
 #if UNITY_EDITOR
         public void OnValidate()
         {
-            if(DepthPyramidGlobals.MipCount != m_MipCount)
+            if(DepthPyramidProvider.MipCount != m_MipCount)
             {
-                if (DepthPyramidGlobals.MipCountDirty)
+                if (DepthPyramidProvider.MipCountDirty)
                 {
-                    m_MipCount = DepthPyramidGlobals.MipCount;
+                    m_MipCount = DepthPyramidProvider.MipCount;
                 }
                 else
                 {
-                    DepthPyramidGlobals.MipCount = m_MipCount;
+                    DepthPyramidProvider.MipCount = m_MipCount;
                 }
             }
 
-            mipLevel = Math.Clamp(mipLevel, 0, DepthPyramidGlobals.MipCount - 1);
+            mipLevel = Math.Clamp(mipLevel, 0, DepthPyramidProvider.MipCount - 1);
         }
 #endif
 
