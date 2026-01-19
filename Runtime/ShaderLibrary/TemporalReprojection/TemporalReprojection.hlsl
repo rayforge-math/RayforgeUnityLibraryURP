@@ -2,5 +2,5 @@
 
 #include "./Defines.hlsl"
 
-#include "../../../Core/ShaderLibrary/TemporalReprojection/Params.hlsl"
-#include "../../../Core/ShaderLibrary/TemporalReprojection/TemporalReprojectionImpl.hlsl"
+#include "Packages/com.rayforge.core/Runtime/ShaderLibrary/TemporalReprojection/Params.hlsl"
+#include "Packages/com.rayforge.core/Runtime/ShaderLibrary/TemporalReprojection/TemporalReprojectionImpl.hlsl"
