@@ -22,11 +22,6 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
     public class DepthPyramidPass : ScriptableRenderPass, IDisposable
     {
         /// <summary>
-        /// Maximum number of mip levels supported.
-        /// </summary>
-        public const int MipCountMax = 16;
-
-        /// <summary>
         /// Data passed to the compute shader for each mip level.
         /// </summary>
         private class DepthPyramidPassData : ComputePassData<DepthPyramidPassData>
@@ -68,17 +63,6 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
         private static readonly int kDestResId = Shader.PropertyToID("_DestRes");
 
         private Vector2Int m_LastResolution = new Vector2Int(-1, -1);
-        private int m_DownsampleMipCount = 2;
-
-        /// <summary>
-        /// Gets or sets the number of mip levels for the pyramid (including mip 0).
-        /// Setting clamps the value between 1 and MipCountMax.
-        /// </summary>
-        private int MipCount
-        {
-            get => m_DownsampleMipCount + 1;
-            set => m_DownsampleMipCount = Mathf.Clamp(value - 1, 0, MipCountMax - 1);
-        }
 
         private readonly RTHandleMipChain m_DepthPyramidHandles;
         private RenderTextureDescriptor m_DepthPyramidDescriptor;
@@ -89,9 +73,6 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
 #if UNITY_EDITOR
         private bool m_Debug = false;
         private int m_DebugMipLevel = 0;
-
-        /// <summary>Editor-only debug mip level, for visualizing the depth pyramid.</summary>
-        private int DebugDownsampleMipLevel => m_DebugMipLevel - 1;
 #endif
 
         /// <summary>
@@ -112,18 +93,14 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
         /// <summary>Disposes any allocated resources.</summary>
         public void Dispose() { }
 
-        /// <summary>Updates the mip count at runtime.</summary>
-        /// <param name="mipCount">Number of mip levels including mip 0.</param>
-        internal void UpdateMipCount(int mipCount) => MipCount = mipCount;
-
 #if UNITY_EDITOR
         /// <summary>Updates editor debug visualization settings.</summary>
         /// <param name="show">Whether to display the depth pyramid.</param>
         /// <param name="mipLevel">Mip level to visualize.</param>
-        public void UpdateDebugSettings(bool show, int mipLevel)
+        internal void UpdateDebugSettings(bool show, int mipLevel)
         {
             m_Debug = show;
-            m_DebugMipLevel = Mathf.Clamp(mipLevel, 0, MipCountMax - 1);
+            m_DebugMipLevel = Mathf.Clamp(mipLevel, 0, DepthPyramidGlobals.MipCountMax - 1);
         }
 #endif
 
@@ -152,21 +129,23 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
                 changed = true;
             }
 
-            if (m_DepthPyramidHandles.MipCount != m_DownsampleMipCount)
+            var downsampleMipCount = Mathf.Clamp(DepthPyramidGlobals.MipCount - 1, 0, DepthPyramidGlobals.MipCountMax - 1);
+            if (m_DepthPyramidHandles.MipCount != downsampleMipCount)
             {
-                if (m_DownsampleMipCount > 0)
-                    m_DepthPyramidHandles.Create(m_DepthPyramidDescriptor, m_DownsampleMipCount);
+                if (downsampleMipCount > 0)
+                    m_DepthPyramidHandles.Create(m_DepthPyramidDescriptor, downsampleMipCount);
                 else
-                    m_DepthPyramidHandles.Resize(m_DownsampleMipCount);
+                    m_DepthPyramidHandles.Resize(0);
 
                 changed = true;
             }
 
             if (changed)
             {
-                DepthPyramidGlobals.Generate(MipCount, baseRes);
+                DepthPyramidGlobals.Generate(baseRes);
             }
 
+            DepthPyramidGlobals.ResetMipCountDirty();
             return changed;
         }
 
@@ -183,7 +162,7 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
         {
             if (depthPyramidHandles == null) throw new ArgumentNullException(nameof(depthPyramidHandles));
 
-            for (int i = 0; i < DepthPyramidGlobals.Count; ++i)
+            for (int i = 0; i < DepthPyramidGlobals.ActiveMipCount; ++i)
             {
                 var mip = DepthPyramidGlobals.GetMip(i);
 
@@ -255,8 +234,9 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
 #if UNITY_EDITOR
             if (m_Debug)
             {
-                TextureHandle debugHandle = DebugDownsampleMipLevel < 0 ? srcDepthBuffer
-                    : m_DepthPyramidHandles[DebugDownsampleMipLevel].ToRenderGraphHandle(renderGraph);
+                var downsampleMipLevel = m_DebugMipLevel - 1;
+                TextureHandle debugHandle = downsampleMipLevel < 0 ? srcDepthBuffer
+                    : m_DepthPyramidHandles[downsampleMipLevel].ToRenderGraphHandle(renderGraph);
 
                 renderGraph.AddBlitPass(debugHandle, resourceData.activeColorTexture, Vector2.one, Vector2.zero);
             }
