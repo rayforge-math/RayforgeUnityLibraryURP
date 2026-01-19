@@ -40,7 +40,7 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
     /// Manages shader property IDs, names, and texel sizes for all mips of a depth pyramid.
     /// Safe: All data is private, arrays are only resized when needed, and values cannot be modified externally.
     /// </summary>
-    public static class DepthPyramidGlobals
+    public static class DepthPyramidProvider
     {
         /// <summary>
         /// Maximum number of mip levels supported.
