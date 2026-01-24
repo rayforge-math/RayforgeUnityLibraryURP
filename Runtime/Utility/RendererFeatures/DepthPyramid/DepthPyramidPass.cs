@@ -66,7 +66,6 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
 
         private readonly RTHandleMipChain m_DepthPyramidHandles;
         private RenderTextureDescriptor m_DepthPyramidDescriptor;
-        private Vector4[] m_TexelSizes = Array.Empty<Vector4>();
         private DepthPyramidPassData m_PassData = new DepthPyramidPassData();
         private ComputePassMeta m_PassMeta;
 
@@ -150,33 +149,6 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
         }
 
         /// <summary>
-        /// Binds all Depth Pyramid mip textures and texel sizes as global shader variables.
-        /// <para>
-        /// Uses the cached DepthPyramidProvider for IDs and texel sizes, and RTHandleMipChain for the actual textures.
-        /// Mip 0 will be set from the source depth buffer; higher mips from the chain.
-        /// </para>
-        /// </summary>
-        /// <param name="depthPyramidHandles">The RTHandleMipChain containing the depth pyramid mips (excluding mip 0).</param>
-        /// <param name="sourceDepth">The original camera depth buffer (mip 0).</param>
-        private static void SetGlobalDepthPyramid(RTHandleMipChain depthPyramidHandles, RTHandle sourceDepth = null)
-        {
-            if (depthPyramidHandles == null) throw new ArgumentNullException(nameof(depthPyramidHandles));
-
-            for (int i = 0; i < DepthPyramidProvider.ActiveMipCount; ++i)
-            {
-                var mip = DepthPyramidProvider.GetMip(i);
-
-                Shader.SetGlobalVector(mip.Ids.texelSize, mip.TexelSize);
-
-                RTHandle handle = i == 0 ? sourceDepth : depthPyramidHandles[i - 1];
-                if (handle != null)
-                {
-                    Shader.SetGlobalTexture(mip.Ids.texture, handle);
-                }
-            }
-        }
-
-        /// <summary>
         /// Records the depth pyramid pass into the RenderGraph.
         /// Sets shader globals for each mip level.
         /// </summary>
@@ -195,7 +167,24 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
             var baseRes = new Vector2Int(camera.pixelWidth, camera.pixelHeight);
             if (CheckAndUpdateTextures(baseRes))
             {
-                SetGlobalDepthPyramid(m_DepthPyramidHandles);
+                DepthPyramidProvider.SetGlobalDepthPyramid(m_DepthPyramidHandles);
+            }
+
+            using (var builder = renderGraph.AddUnsafePass<DepthMip0PassData>("Expose DepthPyramid Mip0", out var passData)) 
+            {
+                var mip0Data = DepthPyramidProvider.GetMip(0);
+
+                passData.handle = srcDepthBuffer;
+                passData.shaderIDs = mip0Data.Ids;
+                passData.texelSize = mip0Data.TexelSize;
+
+                builder.UseTexture(srcDepthBuffer, AccessFlags.Read);
+
+                builder.SetRenderFunc((DepthMip0PassData data, UnsafeGraphContext ctx) =>
+                {
+                    ctx.cmd.SetGlobalTexture(data.shaderIDs.texture, data.handle);
+                    ctx.cmd.SetGlobalVector(data.shaderIDs.texelSize, data.texelSize);
+                });
             }
 
             TextureHandle prevMip = srcDepthBuffer;
