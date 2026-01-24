@@ -114,15 +114,13 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
         /// </returns>
         private bool CheckAndUpdateTextures(Vector2Int baseRes)
         {
-            var resolution = MipChainHelpers.DefaultMipResolution(1, baseRes);
-
             bool changed = false;
 
-            if (m_LastResolution != resolution)
+            if (m_LastResolution != baseRes)
             {
-                m_DepthPyramidDescriptor.width = resolution.x;
-                m_DepthPyramidDescriptor.height = resolution.y;
-                m_LastResolution = resolution;
+                m_DepthPyramidDescriptor.width = baseRes.x;
+                m_DepthPyramidDescriptor.height = baseRes.y;
+                m_LastResolution = baseRes;
 
                 changed = true;
             }
