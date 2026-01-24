@@ -53,7 +53,7 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
         /// </summary>
         [Range(1, MipCountMax), SerializeField, InspectorName("Mip Count")]
         [Tooltip("Number of mip levels to generate for the depth pyramid (1 = full resolution only).")]
-        private int m_MipCount = 8;
+        private int m_MipCount = 4;
 
 #if UNITY_EDITOR
         [Header("Debug")]
