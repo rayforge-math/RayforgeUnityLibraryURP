@@ -34,18 +34,18 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
 
         /// <summary>
         /// Determines at which point in the camera's render pipeline the pass is injected.
-        /// For the depth pyramid, it should be AfterRenderingPrePasses to ensure
+        /// For the depth pyramid, it should be AfterRenderingOpaques to ensure
         /// the camera depth texture is available but before lighting passes that may consume it.
         /// </summary>
         [SerializeField, InspectorName("Injection Point")]
         [Tooltip(
             "When the depth pyramid pass should be executed in the camera render pipeline.\n" +
-            "- Recommended: AfterRenderingPrePasses, so the camera's depth texture is available.\n" +
+            "- Recommended: AfterRenderingOpaques, so the camera's depth texture is available.\n" +
             "- Not later (e.g., AfterRenderingOpaques), because other passes like SSAO, shadows, or post-processing " +
             "may need the depth pyramid earlier in the frame.\n" +
             "- Injecting too early may fail if the depth texture is not yet created."
         )]
-        private RenderPassEvent m_InjectionPoint = RenderPassEvent.AfterRenderingPrePasses;
+        private RenderPassEvent m_InjectionPoint = RenderPassEvent.AfterRenderingOpaques;
 
         /// <summary>
         /// Number of mip levels to generate for the depth pyramid.
@@ -96,7 +96,7 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
         /// The render pass injection point in the pipeline.  
         /// Setting this property updates the internal render pass event immediately.
         ///
-        /// <para>Default is <see cref="RenderPassEvent.AfterRenderingPrePasses"/>.  
+        /// <para>Default is <see cref="RenderPassEvent.AfterRenderingOpaques"/>.  
         /// This is chosen because it ensures that the depth pyramid is generated **after the camera's pre-passes**, 
         /// but **before main opaque rendering**, making it available for any subsequent effects that rely on depth, 
         /// such as SSAO, depth-based post-processing, or motion vectors.

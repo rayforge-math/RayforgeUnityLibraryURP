@@ -1,4 +1,5 @@
-﻿using Rayforge.Core.Common;
+﻿using Mono.Cecil.Cil;
+using Rayforge.Core.Common;
 using Rayforge.Core.Diagnostics;
 using Rayforge.Core.Rendering.Collections.Helpers;
 using Rayforge.Core.Rendering.Helpers;
@@ -121,18 +122,16 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
             {
                 m_DepthPyramidDescriptor.width = resolution.x;
                 m_DepthPyramidDescriptor.height = resolution.y;
-                m_DepthPyramidDescriptor.colorFormat = RenderTextureFormat.RFloat;
-                m_DepthPyramidDescriptor.depthStencilFormat = UnityEngine.Experimental.Rendering.GraphicsFormat.None;
                 m_LastResolution = resolution;
 
                 changed = true;
             }
 
-            var downsampleMipCount = Mathf.Clamp(DepthPyramidProvider.MipCount - 1, 0, DepthPyramidProvider.MipCountMax - 1);
-            if (m_DepthPyramidHandles.MipCount != downsampleMipCount)
+            var mipCount = Mathf.Clamp(DepthPyramidProvider.MipCount, 0, DepthPyramidProvider.MipCountMax);
+            if (m_DepthPyramidHandles.MipCount != mipCount)
             {
-                if (downsampleMipCount > 0)
-                    m_DepthPyramidHandles.Create(m_DepthPyramidDescriptor, downsampleMipCount);
+                if (mipCount > 0)
+                    m_DepthPyramidHandles.Create(m_DepthPyramidDescriptor, mipCount);
                 else
                     m_DepthPyramidHandles.Resize(0);
 
@@ -159,6 +158,8 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
             var resourceData = frameData.Get<UniversalResourceData>();
             var cameraData = frameData.Get<UniversalCameraData>();
 
+            var depthData = frameData.GetOrCreate<DepthPyramidFrameData>();
+
             var srcDepthBuffer = resourceData.activeDepthTexture;
             if (resourceData.isActiveTargetBackBuffer || !srcDepthBuffer.IsValid())
                 return;
@@ -170,34 +171,26 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
                 DepthPyramidProvider.SetGlobalDepthPyramid(m_DepthPyramidHandles);
             }
 
-            using (var builder = renderGraph.AddUnsafePass<DepthMip0PassData>("Expose DepthPyramid Mip0", out var passData)) 
+            var firstMip = m_DepthPyramidHandles[0].ToRenderGraphHandle(renderGraph);
+            renderGraph.AddBlitPass(srcDepthBuffer, firstMip, Vector2.one, Vector2.zero);
+
+            depthData.mips[0] = new TextureHandleMeta<TextureHandle>
             {
-                var mip0Data = DepthPyramidProvider.GetMip(0);
+                Handle = firstMip,
+                Meta = DepthPyramidProvider.GetMip(0).Meta
+            };
 
-                passData.handle = srcDepthBuffer;
-                passData.shaderIDs = mip0Data.Ids;
-                passData.texelSize = mip0Data.TexelSize;
-
-                builder.UseTexture(srcDepthBuffer, AccessFlags.Read);
-
-                builder.SetRenderFunc((DepthMip0PassData data, UnsafeGraphContext ctx) =>
-                {
-                    ctx.cmd.SetGlobalTexture(data.shaderIDs.texture, data.handle);
-                    ctx.cmd.SetGlobalVector(data.shaderIDs.texelSize, data.texelSize);
-                });
-            }
-
-            TextureHandle prevMip = srcDepthBuffer;
+            TextureHandle prevMip = firstMip;
             Vector2 prevRes = baseRes;
 
-            for (int i = 0; i < m_DepthPyramidHandles.MipCount; ++i)
+            for (int i = 1; i < m_DepthPyramidHandles.MipCount; ++i)
             {
                 var curMip = m_DepthPyramidHandles[i].ToRenderGraphHandle(renderGraph);
                 if (!curMip.IsValid()) break;
 
-                var mipData = DepthPyramidProvider.GetMip(i + 1);
+                var mipData = DepthPyramidProvider.GetMip(i);
 
-                Vector4 texelSize = mipData.TexelSize;
+                Vector4 texelSize = mipData.Meta.TexelSize;
                 Vector2 curRes = new Vector2(texelSize.z, texelSize.w);
 
                 var passMeta = m_PassMeta;
@@ -218,15 +211,18 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
                 RenderPassRecorder.AddComputePass(renderGraph, kKernelName, m_PassData);
                 prevMip = curMip;
                 prevRes = curRes;
+
+                depthData.mips[i] = new TextureHandleMeta<TextureHandle>
+                {
+                    Handle = curMip,
+                    Meta = DepthPyramidProvider.GetMip(i).Meta
+                };
             }
 
 #if UNITY_EDITOR
             if (m_Debug)
             {
-                var downsampleMipLevel = m_DebugMipLevel - 1;
-                TextureHandle debugHandle = downsampleMipLevel < 0 ? srcDepthBuffer
-                    : m_DepthPyramidHandles[downsampleMipLevel].ToRenderGraphHandle(renderGraph);
-
+                TextureHandle debugHandle = depthData.mips[m_DebugMipLevel].Handle;
                 renderGraph.AddBlitPass(debugHandle, resourceData.activeColorTexture, Vector2.one, Vector2.zero);
             }
 #endif

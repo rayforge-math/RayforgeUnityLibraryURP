@@ -1,42 +1,13 @@
 ﻿using Rayforge.Core.Common;
-using Rayforge.Core.Rendering.Abstractions;
 using Rayforge.Core.Rendering.Collections.Helpers;
 using Rayforge.Core.Rendering.Passes;
 using Rayforge.Core.Utility.RenderGraphs.Collections;
 using System;
-using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.Rendering;
 
 namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
 {
-    /// <summary>
-    /// Represents the complete data for a single mip level of the depth pyramid.
-    /// Combines shader property IDs, dimensions, and the actual texture handle.
-    /// </summary>
-    public readonly struct DepthPyramidMip
-    {
-        /// <summary> The shader property IDs for the texture and its texel size. </summary>
-        public readonly TextureIds Ids;
-
-        /// <summary> Human-readable name for this mip level (e.g., for debugging). </summary>
-        public readonly string Name;
-
-        /// <summary> Texel size vector: x = 1/width, y = 1/height, z = width, w = height. </summary>
-        public readonly Vector4 TexelSize;
-
-        /// <summary> The assigned RTHandle. Mip 0 is usually CameraDepth; Mips 1+ are generated. </summary>
-        public readonly RTHandle Handle;
-
-        internal DepthPyramidMip(TextureIds ids, string name, Vector4 texelSize, RTHandle handle)
-        {
-            Ids = ids;
-            Name = name;
-            TexelSize = texelSize;
-            Handle = handle;
-        }
-    }
-
     /// <summary>
     /// Central data provider for the Depth Pyramid. 
     /// Manages metadata and texture references synchronously within a single structure.
@@ -51,7 +22,7 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
         private static int s_MipCount = 1;
         private static bool s_MipCountDirty = false;
         private static Vector2Int s_CurrentBaseRes;
-        private static DepthPyramidMip[] s_Mips = Array.Empty<DepthPyramidMip>();
+        private static TextureHandleMeta<RTHandle>[] s_Mips = Array.Empty<TextureHandleMeta<RTHandle>>();
 
         /// <summary> 
         /// Returns true if the mip count has changed since the last reset. 
@@ -83,7 +54,7 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
         /// <summary> 
         /// Provides high-performance read-only access to all mip data via Span.
         /// </summary>
-        public static ReadOnlySpan<DepthPyramidMip> Mips => s_Mips;
+        public static ReadOnlySpan<TextureHandleMeta<RTHandle>> Mips => s_Mips;
 
         /// <summary> Resets the dirty flag for the mip count. </summary>
         internal static void ResetMipCountDirty() => s_MipCountDirty = false;
@@ -104,7 +75,7 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
         /// </summary>
         /// <param name="index">0 for full-res, 1+ for downsampled levels.</param>
         /// <returns>The <see cref="DepthPyramidMip"/> structure.</returns>
-        public static DepthPyramidMip GetMip(int index)
+        public static TextureHandleMeta<RTHandle> GetMip(int index)
         {
             if (index < 0 || index >= s_Mips.Length)
                 throw new ArgumentOutOfRangeException(nameof(index));
@@ -122,7 +93,7 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
                 return;
 
             s_CurrentBaseRes = baseRes;
-            s_Mips = new DepthPyramidMip[s_MipCount];
+            s_Mips = new TextureHandleMeta<RTHandle>[s_MipCount];
 
             for (int i = 0; i < s_MipCount; i++)
             {
@@ -136,7 +107,7 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
                 };
 
                 var texelSize = new Vector4(1f / mipRes.x, 1f / mipRes.y, (float)mipRes.x, (float)mipRes.y);
-                s_Mips[i] = new DepthPyramidMip(ids, name, texelSize, null);
+                s_Mips[i] = new TextureHandleMeta<RTHandle>(ids, name, texelSize, null);
             }
             ResetMipCountDirty();
         }
@@ -148,27 +119,27 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
         /// <param name="sourceDepth">The original camera depth texture (for index 0).</param>
         /// <exception cref="ArgumentNullException">Thrown if depthPyramidHandles is null.</exception>
         /// <exception cref="InvalidOperationException">Thrown if the chain length does not match expected mip count.</exception>
-        internal static void SetGlobalDepthPyramid(RTHandleMipChain depthPyramidHandles, RTHandle sourceDepth = null)
+        internal static void SetGlobalDepthPyramid(RTHandleMipChain depthPyramidHandles)
         {
             if (depthPyramidHandles == null) throw new ArgumentNullException(nameof(depthPyramidHandles));
 
             int expected = s_Mips.Length;
-            if (depthPyramidHandles.MipCount + 1 != expected)
-                throw new InvalidOperationException($"Mip-Chain mismatch. Provider: {expected}, Chain: {depthPyramidHandles.MipCount + 1}");
+            if (depthPyramidHandles.MipCount != expected)
+                throw new InvalidOperationException($"Mip-Chain mismatch. Provider: {expected}, Chain: {depthPyramidHandles.MipCount}");
 
             for (int i = 0; i < expected; i++)
             {
-                RTHandle currentHandle = (i == 0) ? sourceDepth : depthPyramidHandles[i - 1];
+                RTHandle currentHandle = depthPyramidHandles[i];
 
                 // Re-create the struct with the handle (since it's a readonly struct)
                 var m = s_Mips[i];
-                s_Mips[i] = new DepthPyramidMip(m.Ids, m.Name, m.TexelSize, currentHandle);
+                s_Mips[i] = new TextureHandleMeta<RTHandle>(m.Meta, currentHandle);
 
                 // Global GPU binding
-                Shader.SetGlobalVector(s_Mips[i].Ids.texelSize, s_Mips[i].TexelSize);
+                Shader.SetGlobalVector(s_Mips[i].Meta.Ids.texelSize, s_Mips[i].Meta.TexelSize);
                 if (currentHandle != null)
                 {
-                    Shader.SetGlobalTexture(s_Mips[i].Ids.texture, currentHandle);
+                    Shader.SetGlobalTexture(s_Mips[i].Meta.Ids.texture, currentHandle);
                 }
             }
         }
