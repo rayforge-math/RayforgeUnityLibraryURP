@@ -1,6 +1,6 @@
 {
   "name": "com.rayforge.urp",
-  "version": "1.2.3",
+  "version": "1.2.2",
   "displayName": "Rayforge URP Library",
   "description": "URP-specific features and utilities for Rayforge Core Library.",
   "unity": "6000.0",
