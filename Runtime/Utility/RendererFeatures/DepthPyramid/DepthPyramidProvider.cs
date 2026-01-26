@@ -1,4 +1,5 @@
 ﻿using Rayforge.Core.Common;
+using Rayforge.Core.Common.LowLevel;
 using Rayforge.Core.Rendering.Collections.Helpers;
 using Rayforge.Core.Rendering.Passes;
 using Rayforge.Core.Utility.RenderGraphs.Collections;
@@ -9,6 +10,24 @@ using UnityEngine.Rendering;
 namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
 {
     /// <summary>
+    /// Defines the downsampling logic for the different depth chains.
+    /// </summary>
+    public enum DepthChainType
+    {
+        /// <summary> 
+        /// Selects the smallest depth value (nearest point). 
+        /// Useful for SSAO and Occlusion Culling. 
+        /// </summary>
+        Min,
+
+        /// <summary> 
+        /// Selects the largest depth value (farthest point). 
+        /// Essential for Raymarching (Empty Space Skipping). 
+        /// </summary>
+        Max
+    }
+
+    /// <summary>
     /// Central data provider for the Depth Pyramid. 
     /// Manages metadata and texture references synchronously within a single structure.
     /// </summary>
@@ -17,87 +36,183 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
         /// <summary> Maximum number of supported mip levels. </summary>
         public const int MipCountMax = 16;
 
-        private const string k_BaseName = "_" + Globals.CompanyName + "_DepthPyramidMip";
-
-        private static int s_MipCount = 1;
-        private static bool s_MipCountDirty = false;
-        private static Vector2Int s_CurrentBaseRes;
-        private static TextureHandleMeta<RTHandle>[] s_Mips = Array.Empty<TextureHandleMeta<RTHandle>>();
-
-        /// <summary> 
-        /// Returns true if the mip count has changed since the last reset. 
-        /// Used by RenderFeatures to trigger re-allocations.
-        /// </summary>
-        internal static bool MipCountDirty => s_MipCountDirty;
-
-        /// <summary> 
-        /// The currently requested number of mip levels (including Mip 0).
-        /// Changing this value sets <see cref="MipCountDirty"/> to true.
-        /// </summary>
-        public static int MipCount
+        private struct ChainData
         {
-            get => s_MipCount;
-            set
+            public TextureHandleMeta<RTHandle>[] Mips;
+            public string Suffix;
+            public int RequestedCount;
+
+            public int MipCount => Mips == null ? 0 : Mips.Length;
+            public bool IsActive => Mips != null && Mips.Length > 0;
+            public bool IsRequested => RequestedCount > 0;
+        }
+
+        private static ChainData s_ChainMin = new ChainData { Suffix = "Min", Mips = Array.Empty<TextureHandleMeta<RTHandle>>() };
+        private static ChainData s_ChainMax = new ChainData { Suffix = "Max", Mips = Array.Empty<TextureHandleMeta<RTHandle>>() };
+
+        private const string k_BaseName = "_" + Globals.CompanyName + "_DepthPyramid";
+
+        private static Vector2Int s_CurrentBaseRes;
+
+        internal const uint MinDirty = 1 << 0;
+        internal const uint MaxDirty = 1 << 1;
+        internal const uint AllDirty = MinDirty | MaxDirty;
+
+        private static DirtyFlags s_Dirty;
+
+        internal static bool IsAnyDirty => s_Dirty.Any;
+
+        /// <summary>
+        /// Checks if a specific chain type or any chain at all is marked as dirty.
+        /// </summary>
+        public static bool IsDirty(DepthChainType type)
+        {
+            return type switch
             {
-                value = Math.Clamp(value, 1, MipCountMax);
-                if (s_MipCount != value)
+                DepthChainType.Min => s_Dirty.IsDirty(MinDirty),
+                DepthChainType.Max => s_Dirty.IsDirty(MaxDirty),
+                _ => s_Dirty.Any
+            };
+        }
+
+        /// <summary>
+        /// Resets all dirty flags, marking all chains as up-to-date.
+        /// </summary>
+        internal static void ResetDirty() => s_Dirty.ClearAll();
+
+        /// <summary>
+        /// Resets the dirty flag for a specific chain type.
+        /// Should be called after the respective chain has been regenerated and bound.
+        /// </summary>
+        /// <param name="type">The depth chain type to clear.</param>
+        internal static void ResetDirty(DepthChainType type)
+        {
+            switch (type)
+            {
+                case DepthChainType.Min:
+                    s_Dirty.Clear(MinDirty);
+                    break;
+                case DepthChainType.Max:
+                    s_Dirty.Clear(MaxDirty);
+                    break;
+            }
+        }
+
+        /// <summary>
+        /// Helper to access the current requested count for a specific chain.
+        /// </summary>
+        public static int GetRequestedCount(DepthChainType type)
+        {
+            return type switch
+            {
+                DepthChainType.Min => s_ChainMin.RequestedCount,
+                DepthChainType.Max => s_ChainMax.RequestedCount,
+                _ => 0
+            };
+        }
+
+        /// <summary>
+        /// Public API to request specific depth chains. 
+        /// The dirty flag is handled based on the provided DepthChainType.
+        /// </summary>
+        public static void EnsureMipCount(DepthChainType type, int count, bool force = false)
+        {
+            switch (type)
+            {
+                case DepthChainType.Min:
+                    EnsureMipCount(ref s_ChainMin, count, MinDirty, force);
+                    break;
+                case DepthChainType.Max:
+                    EnsureMipCount(ref s_ChainMax, count, MaxDirty, force);
+                    break;
+            }
+        }
+
+        /// <summary>
+        /// Internal method to handle array resizing and bitwise dirty flag updates.
+        /// </summary>
+        private static void EnsureMipCount(ref ChainData chain, int count, uint flag, bool force = false)
+        {
+            count = Math.Clamp(count, 0, MipCountMax);
+
+            if (force || chain.RequestedCount < count)
+            {
+                if (chain.RequestedCount != count)
                 {
-                    s_MipCount = value;
-                    s_MipCountDirty = true;
+                    chain.RequestedCount = count;
+                    s_Dirty.MarkDirty(flag);
                 }
             }
         }
 
-        /// <summary> The number of currently allocated and valid mip levels. </summary>
-        public static int ActiveMipCount => s_Mips.Length;
-
-        /// <summary> 
-        /// Provides high-performance read-only access to all mip data via Span.
-        /// </summary>
-        public static ReadOnlySpan<TextureHandleMeta<RTHandle>> Mips => s_Mips;
-
-        /// <summary> Resets the dirty flag for the mip count. </summary>
-        internal static void ResetMipCountDirty() => s_MipCountDirty = false;
-
         /// <summary>
-        /// Ensures the pyramid generates at least the requested number of mips.
+        /// Returns the metadata for the requested chain as a ReadOnlySpan for high-performance iteration.
         /// </summary>
-        /// <param name="requestedMipCount">Desired count (1 to 16).</param>
-        /// <param name="force">If true, sets the value exactly; otherwise, only increases it.</param>
-        public static void EnsureMipCount(int requestedMipCount, bool force = false)
+        /// <param name="type">The depth chain type (Min/Max).</param>
+        /// <returns>A read-only view of the mip metadata array.</returns>
+        public static ReadOnlySpan<TextureHandleMeta<RTHandle>> GetMips(DepthChainType type)
         {
-            requestedMipCount = Math.Clamp(requestedMipCount, 1, MipCountMax);
-            if (force || requestedMipCount > s_MipCount) MipCount = requestedMipCount;
+            return type switch
+            {
+                DepthChainType.Min => s_ChainMin.Mips,
+                DepthChainType.Max => s_ChainMax.Mips,
+                _ => throw new ArgumentOutOfRangeException(nameof(type), "Unsupported depth chain type.")
+            };
         }
 
         /// <summary>
-        /// Retrieves the data for a specific mip level.
+        /// Returns the metadata for a specific mip level of the requested chain.
         /// </summary>
-        /// <param name="index">0 for full-res, 1+ for downsampled levels.</param>
-        /// <returns>The <see cref="DepthPyramidMip"/> structure.</returns>
-        public static TextureHandleMeta<RTHandle> GetMip(int index)
+        /// <param name="type">The depth chain type (Min/Max).</param>
+        /// <param name="index">The mip level index.</param>
+        public static TextureHandleMeta<RTHandle> GetMip(DepthChainType type, int index)
         {
-            if (index < 0 || index >= s_Mips.Length)
-                throw new ArgumentOutOfRangeException(nameof(index));
-            return s_Mips[index];
+            var mips = GetMips(type);
+
+            if (index < 0 || index >= mips.Length)
+            {
+                return default;
+            }
+
+            return mips[index];
         }
 
         /// <summary>
-        /// Calculates shader IDs and texel sizes based on resolution.
-        /// Texture handles are initialized as null until <see cref="SetGlobalDepthPyramid"/> is called.
+        /// Recreates the metadata array for a specific chain type based on the current requested count.
+        /// Texture handles are initialized as null until the pass binds them.
         /// </summary>
+        /// <param name="type">The specific depth chain to generate.</param>
         /// <param name="baseRes">Base resolution (usually the camera pixel rect).</param>
-        internal static void Generate(Vector2Int baseRes)
+        internal static void Generate(DepthChainType type, Vector2Int baseRes)
         {
-            if (s_Mips.Length == s_MipCount && s_CurrentBaseRes == baseRes)
+            switch (type)
+            {
+                case DepthChainType.Min:
+                    GenerateChain(ref s_ChainMin, baseRes, MinDirty);
+                    break;
+                case DepthChainType.Max:
+                    GenerateChain(ref s_ChainMax, baseRes, MaxDirty);
+                    break;
+            }
+        }
+
+        /// <summary>
+        /// Internal helper that performs the actual array allocation and metadata calculation.
+        /// </summary>
+        private static void GenerateChain(ref ChainData chain, Vector2Int baseRes, uint flag)
+        {
+            if (s_CurrentBaseRes == baseRes && !s_Dirty.IsDirty(flag))
                 return;
 
             s_CurrentBaseRes = baseRes;
-            s_Mips = new TextureHandleMeta<RTHandle>[s_MipCount];
 
-            for (int i = 0; i < s_MipCount; i++)
+            Array.Resize(ref chain.Mips, chain.RequestedCount);
+
+            if (!chain.IsRequested) return;
+
+            for (int i = 0; i < chain.RequestedCount; i++)
             {
-                string name = $"{k_BaseName}{i}";
+                string name = $"{k_BaseName}{chain.Suffix}_Mip{i}";
                 Vector2Int mipRes = MipChainHelpers.DefaultMipResolution(i, baseRes);
 
                 var ids = new TextureIds
@@ -107,39 +222,56 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
                 };
 
                 var texelSize = new Vector4(1f / mipRes.x, 1f / mipRes.y, (float)mipRes.x, (float)mipRes.y);
-                s_Mips[i] = new TextureHandleMeta<RTHandle>(ids, name, texelSize, null);
+
+                chain.Mips[i] = new TextureHandleMeta<RTHandle>(ids, name, texelSize, null);
             }
-            ResetMipCountDirty();
         }
 
         /// <summary>
-        /// Links RTHandles to the mip structures and binds them as global shader variables.
+        /// Binds a specific RTHandleMipChain to the provider's metadata.
         /// </summary>
-        /// <param name="depthPyramidHandles">The chain of downsampled mips (for indices 1 to N).</param>
-        /// <param name="sourceDepth">The original camera depth texture (for index 0).</param>
-        /// <exception cref="ArgumentNullException">Thrown if depthPyramidHandles is null.</exception>
-        /// <exception cref="InvalidOperationException">Thrown if the chain length does not match expected mip count.</exception>
-        internal static void SetGlobalDepthPyramid(RTHandleMipChain depthPyramidHandles)
+        /// <param name="type">The type of the chain being bound (Min, Max, or Point).</param>
+        /// <param name="handleChain">The actual RTHandle chain containing the textures.</param>
+        /// <param name="setGlobal">If true, sets the textures and texel sizes as global shader properties.</param>
+        internal static void SetGlobalDepthPyramid(DepthChainType type, RTHandleMipChain handleChain, bool setGlobal = false)
         {
-            if (depthPyramidHandles == null) throw new ArgumentNullException(nameof(depthPyramidHandles));
+            if (handleChain == null) return;
 
-            int expected = s_Mips.Length;
-            if (depthPyramidHandles.MipCount != expected)
-                throw new InvalidOperationException($"Mip-Chain mismatch. Provider: {expected}, Chain: {depthPyramidHandles.MipCount}");
-
-            for (int i = 0; i < expected; i++)
+            switch (type)
             {
-                RTHandle currentHandle = depthPyramidHandles[i];
+                case DepthChainType.Max:
+                    BindChain(ref s_ChainMax, handleChain, setGlobal);
+                    break;
+                case DepthChainType.Min:
+                    BindChain(ref s_ChainMin, handleChain, setGlobal);
+                    break;
+            }
+        }
 
-                // Re-create the struct with the handle (since it's a readonly struct)
-                var m = s_Mips[i];
-                s_Mips[i] = new TextureHandleMeta<RTHandle>(m.Meta, currentHandle);
+        /// <summary>
+        /// Synchronizes RTHandles from a MipChain into the metadata structs.
+        /// Optionally sets the handles as global shader properties (usually only for the Max/Main chain).
+        /// </summary>
+        private static void BindChain(ref ChainData chain, RTHandleMipChain handleChain, bool setGlobal)
+        {
+            if (!chain.IsRequested || handleChain == null) return;
 
-                // Global GPU binding
-                Shader.SetGlobalVector(s_Mips[i].Meta.Ids.texelSize, s_Mips[i].Meta.TexelSize);
-                if (currentHandle != null)
+            int count = Math.Min(chain.MipCount, handleChain.MipCount);
+
+            for (int i = 0; i < count; i++)
+            {
+                RTHandle currentHandle = handleChain[i];
+                var m = chain.Mips[i];
+
+                chain.Mips[i] = new TextureHandleMeta<RTHandle>(m.Meta, currentHandle);
+
+                if (setGlobal)
                 {
-                    Shader.SetGlobalTexture(s_Mips[i].Meta.Ids.texture, currentHandle);
+                    Shader.SetGlobalVector(m.Meta.Ids.texelSize, m.Meta.TexelSize);
+                    if (currentHandle != null)
+                    {
+                        Shader.SetGlobalTexture(m.Meta.Ids.texture, currentHandle);
+                    }
                 }
             }
         }

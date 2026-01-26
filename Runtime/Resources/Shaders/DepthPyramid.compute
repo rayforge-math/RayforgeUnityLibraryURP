@@ -1,57 +1,31 @@
-#pragma kernel DownsampleHighZ
+// Kernels for the different depth pyramid chains
+#pragma kernel DownsampleMin
+#pragma kernel DownsampleMax
 
-/**
- * @brief Returns the minimum value of all four components of a float4.
- * @param v Input vector.
- * @return Minimum of v.x, v.y, v.z and v.w.
- */
-float Min4(float4 v);
-
-/**
- * @brief Returns the maximum value of all four components of a float4.
- * @param v Input vector.
- * @return Maximum of v.x, v.y, v.z and v.w.
- */
-float Max4(float4 v);
-
-/** Source depth texture. */
+/** Source depth texture (previous mip level). */
 Texture2D<float> _Source;
 
-/** Destination Hi-Z texture. */
+/** Destination texture (current mip level). */
 RWTexture2D<float> _Dest;
 
-/**
- * @brief Parameters for the Hi-Z downsampling pass.
- *
- * @note This constant buffer is explicitly laid out to respect
- *       HLSL constant buffer packing rules (16-byte alignment).
- *
- *       Do NOT change the member order or add smaller types
- *       without considering alignment and padding.
+/** * Parameters for the downsampling pass. 
+ * Using uint2 to match the C# side and ensure proper alignment.
  */
-cbuffer _DownsampleHighZParams
+cbuffer _DownsampleParams
 {
     uint2 _SourceRes;
     uint2 _DestRes;
 };
 
 /**
- * @brief Downsamples the depth buffer by a factor of 2x2 to build a Hi-Z level.
- *
- * For each destination pixel, four corresponding source pixels are sampled.
- * Depending on the depth convention, either the minimum (reversed Z)
- * or maximum (regular Z) depth is written.
- *
- * @param id Dispatch thread ID corresponding to the destination pixel.
+ * @brief Gathers 4 depth samples from the source texture using a 2x2 neighborhood.
+ * Clamps coordinates to the source resolution to handle odd-sized textures.
  */
-[numthreads(8, 8, 1)]
-void DownsampleHighZ(uint3 id : SV_DispatchThreadID)
+float4 GatherSamples(uint2 id)
 {
-    if (_DestRes.x <= id.x || _DestRes.y <= id.y)
-        return;
-
-    uint2 base = id.xy * 2;
+    uint2 base = id * 2;
     
+    // Boundary protection for odd-sized source textures
     uint2 c00 = base;
     uint2 c10 = min(base + uint2(1, 0), _SourceRes - 1);
     uint2 c01 = min(base + uint2(0, 1), _SourceRes - 1);
@@ -62,31 +36,33 @@ void DownsampleHighZ(uint3 id : SV_DispatchThreadID)
     samples.y = _Source[c10].r;
     samples.z = _Source[c01].r;
     samples.w = _Source[c11].r;
-
-    float result;
-    
-    // Reversed-Z: nearer = larger value, so take the minimum
-    result = Min4(samples);
-
-    _Dest[id.xy] = result;
+    return samples;
 }
 
 /**
- * @brief Computes the minimum of four scalar values packed in a float4.
- * @param v Input vector.
- * @return Minimum value.
+ * @brief Downsamples by taking the minimum of 4 samples.
+ * Used for the "Min" chain (backwards-conservative in Reversed-Z).
  */
-float Min4(float4 v)
+[numthreads(8, 8, 1)]
+void DownsampleMin(uint3 id : SV_DispatchThreadID)
 {
-    return min(min(v.x, v.y), min(v.z, v.w));
+    if (id.x >= _DestRes.x || id.y >= _DestRes.y)
+        return;
+
+    float4 samples = GatherSamples(id.xy);
+    _Dest[id.xy] = min(min(samples.x, samples.y), min(samples.z, samples.w));
 }
 
 /**
- * @brief Computes the maximum of four scalar values packed in a float4.
- * @param v Input vector.
- * @return Maximum value.
+ * @brief Downsamples by taking the maximum of 4 samples.
+ * Used for the "Max" chain (conservative depth for occlusion/raymarching).
  */
-float Max4(float4 v)
+[numthreads(8, 8, 1)]
+void DownsampleMax(uint3 id : SV_DispatchThreadID)
 {
-    return max(max(v.x, v.y), max(v.z, v.w));
+    if (id.x >= _DestRes.x || id.y >= _DestRes.y)
+        return;
+
+    float4 samples = GatherSamples(id.xy);
+    _Dest[id.xy] = max(max(samples.x, samples.y), max(samples.z, samples.w));
 }

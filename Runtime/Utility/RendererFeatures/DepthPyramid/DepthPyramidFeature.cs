@@ -6,125 +6,57 @@ using UnityEngine.Rendering.Universal;
 
 namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
 {
-    /// <summary>
-    /// ScriptableRendererFeature that generates a hierarchical depth pyramid for use in effects like SSAO or depth-based post-processing.
-    /// </summary>
     public class DepthPyramidFeature : ScriptableRendererFeature
     {
-        /// <summary>
-        /// Maximum number of mip levels supported by the depth pyramid.
-        /// </summary>
         public const int MipCountMax = DepthPyramidProvider.MipCountMax;
-
-        /// <summary>
-        /// Name of the shader used to generate the depth pyramid.
-        /// </summary>
         private const string k_ShaderName = "DepthPyramid";
-
-        /// <summary>
-        /// Full path to the depth pyramid shader within the project's resources.
-        /// </summary>
         private static readonly string k_FullShaderName = ResourcePaths.ShaderResourceFolder + k_ShaderName;
-
-        /// <summary>
-        /// The type of input required from the camera for this render pass.
-        /// Depth pyramid generation requires the camera's depth texture.
-        /// </summary>
         private const ScriptableRenderPassInput k_PassInput = ScriptableRenderPassInput.Depth;
 
-        /// <summary>
-        /// Determines at which point in the camera's render pipeline the pass is injected.
-        /// For the depth pyramid, it should be AfterRenderingOpaques to ensure
-        /// the camera depth texture is available but before lighting passes that may consume it.
-        /// </summary>
         [SerializeField, InspectorName("Injection Point")]
-        [Tooltip(
-            "When the depth pyramid pass should be executed in the camera render pipeline.\n" +
-            "- Recommended: AfterRenderingOpaques, so the camera's depth texture is available.\n" +
-            "- Not later (e.g., AfterRenderingOpaques), because other passes like SSAO, shadows, or post-processing " +
-            "may need the depth pyramid earlier in the frame.\n" +
-            "- Injecting too early may fail if the depth texture is not yet created."
-        )]
+        [Tooltip("Recommended: AfterRenderingOpaques.")]
         private RenderPassEvent m_InjectionPoint = RenderPassEvent.AfterRenderingOpaques;
 
-        /// <summary>
-        /// Number of mip levels to generate for the depth pyramid.
-        /// Must be between 1 and <see cref="MipCountMax"/>.
-        /// </summary>
-        [Range(1, MipCountMax), SerializeField, InspectorName("Mip Count")]
-        [Tooltip("Number of mip levels to generate for the depth pyramid (1 = full resolution only).")]
-        private int m_MipCount = 4;
+        [Header("Chain Settings")]
+        [Range(1, MipCountMax), SerializeField, InspectorName("Min Mips")]
+        private int m_MinMipCount = 1;
+
+        [Range(1, MipCountMax), SerializeField, InspectorName("Max Mips")]
+        private int m_MaxMipCount = 1;
 
 #if UNITY_EDITOR
         [Header("Debug")]
-
-        /// <summary>
-        /// Toggle to visualize the depth pyramid in the editor for debugging purposes.
-        /// </summary>
-        [Tooltip("Toggle to visualize the generated depth pyramid in the editor.")]
+        [Tooltip("Toggle to visualize a specific depth chain in the editor.")]
         public bool showDepthPyramid = false;
 
-        /// <summary>
-        /// The mip level to visualize when debugging.
-        /// Only used if <see cref="showDepthPyramid"/> is enabled.
-        /// </summary>
+        [Tooltip("Which chain type to visualize.")]
+        public DepthChainType debugChainType = DepthChainType.Max;
+
         [Range(0, MipCountMax - 1)]
-        [Tooltip("Which mip level of the depth pyramid to display for debugging.")]
+        [Tooltip("Which mip level of the selected chain to display.")]
         public int mipLevel = 0;
 #endif
 
 #if UNITY_EDITOR
         public void OnValidate()
         {
-            if(DepthPyramidProvider.MipCount != m_MipCount)
-            {
-                if (DepthPyramidProvider.MipCountDirty)
-                {
-                    m_MipCount = DepthPyramidProvider.MipCount;
-                }
-                else
-                {
-                    DepthPyramidProvider.MipCount = m_MipCount;
-                }
-            }
+            DepthPyramidProvider.EnsureMipCount(DepthChainType.Min, m_MinMipCount, true);
+            DepthPyramidProvider.EnsureMipCount(DepthChainType.Max, m_MaxMipCount, true);
 
-            mipLevel = Math.Clamp(mipLevel, 0, DepthPyramidProvider.MipCount - 1);
+            int activeMax = debugChainType switch
+            {
+                DepthChainType.Min => m_MinMipCount,
+                DepthChainType.Max => m_MaxMipCount,
+                _ => 1
+            };
+            mipLevel = Math.Clamp(mipLevel, 0, Math.Max(0, activeMax - 1));
         }
 #endif
 
-        /// <summary>
-        /// The render pass injection point in the pipeline.  
-        /// Setting this property updates the internal render pass event immediately.
-        ///
-        /// <para>Default is <see cref="RenderPassEvent.AfterRenderingOpaques"/>.  
-        /// This is chosen because it ensures that the depth pyramid is generated **after the camera's pre-passes**, 
-        /// but **before main opaque rendering**, making it available for any subsequent effects that rely on depth, 
-        /// such as SSAO, depth-based post-processing, or motion vectors.
-        /// Otherwise, depth values might be outdated or in an invalid state.
-        /// </para>
-        /// </summary>
-        public RenderPassEvent InjectionPoint
-        {
-            get => m_InjectionPoint;
-            set
-            {
-                m_InjectionPoint = value;
-                if (m_RenderPass != null)
-                    m_RenderPass.renderPassEvent = m_InjectionPoint;
-            }
-        }
-
         [SerializeField, HideInInspector]
         private ComputeShader m_Shader;
-
-        /// <summary>
-        /// Internal instance of the DepthPyramidPass.
-        /// </summary>
         private DepthPyramidPass m_RenderPass;
 
-        /// <summary>
-        /// Called when the renderer feature is created. Loads the compute shader and initializes the render pass.
-        /// </summary>
         public override void Create()
         {
             if (m_Shader == null)
@@ -136,7 +68,6 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
             if (m_Shader != null)
             {
                 m_RenderPass?.Dispose();
-
                 m_RenderPass = new DepthPyramidPass(m_Shader)
                 {
                     renderPassEvent = m_InjectionPoint
@@ -144,12 +75,6 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
             }
         }
 
-        /// <summary>
-        /// Adds the DepthPyramidPass to the renderer if the camera type is <see cref="CameraType.Game"/>.
-        /// Configures the required inputs before enqueueing.
-        /// </summary>
-        /// <param name="renderer">The ScriptableRenderer instance.</param>
-        /// <param name="renderingData">Current rendering data.</param>
         public override void AddRenderPasses(ScriptableRenderer renderer, ref RenderingData renderingData)
         {
             if (m_RenderPass == null) return;
@@ -160,7 +85,8 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
 
                 var passInput = k_PassInput;
 #if UNITY_EDITOR
-                m_RenderPass.UpdateDebugSettings(showDepthPyramid, mipLevel);
+                m_RenderPass.UpdateDebugSettings(showDepthPyramid, debugChainType, mipLevel);
+
                 if (showDepthPyramid)
                 {
                     m_RenderPass.renderPassEvent = RenderPassEvent.AfterRenderingPostProcessing;
@@ -173,10 +99,6 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
             }
         }
 
-        /// <summary>
-        /// Disposes the internal render pass and any unmanaged resources.
-        /// </summary>
-        /// <param name="disposing">Indicates whether the method is called from Dispose (true) or from a finalizer (false).</param>
         protected override void Dispose(bool disposing)
         {
             base.Dispose(disposing);
