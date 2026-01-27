@@ -40,9 +40,37 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
 #if UNITY_EDITOR
         public void OnValidate()
         {
-            DepthPyramidProvider.EnsureMipCount(DepthChainType.Min, m_MinMipCount, true);
-            DepthPyramidProvider.EnsureMipCount(DepthChainType.Max, m_MaxMipCount, true);
+            UdpateMipCount();
+            UdpateMipLevel();
+        }
 
+        private void UdpateMipCount()
+        {
+            m_MinMipCount = UpdateMipCount(DepthChainType.Min, m_MinMipCount);
+            m_MaxMipCount = UpdateMipCount(DepthChainType.Max, m_MaxMipCount);
+        }
+
+        private int UpdateMipCount(DepthChainType type, int mipCount)
+        {
+            var dirty = DepthPyramidProvider.IsDirty(type);
+            var current = DepthPyramidProvider.GetRequestedCount(type);
+
+            if(mipCount != current)
+            {
+                if (dirty)
+                {
+                    mipCount = current;
+                }
+                else
+                {
+                    DepthPyramidProvider.EnsureMipCount(type, mipCount, true);
+                }
+            }
+            return mipCount;
+        }
+
+        private void UdpateMipLevel()
+        {
             int activeMax = debugChainType switch
             {
                 DepthChainType.Min => m_MinMipCount,
@@ -85,6 +113,9 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
 
                 var passInput = k_PassInput;
 #if UNITY_EDITOR
+
+                UdpateMipCount();
+                UdpateMipLevel();
                 m_RenderPass.UpdateDebugSettings(showDepthPyramid, debugChainType, mipLevel);
 
                 if (showDepthPyramid)
