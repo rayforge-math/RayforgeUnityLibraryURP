@@ -19,7 +19,7 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
         {
             public Vector2 sourceRes;
             public Vector2 destRes;
-            public int chainIndex; // To identify Min/Max/Point in the shader
+            public int chainIndex;
 
             public override void CopyUserData(DepthPyramidPassData other)
             {
@@ -36,8 +36,8 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
 
         private Vector2Int m_LastResolution = new Vector2Int(-1, -1);
 
-        private readonly RTHandleMipChain m_MaxHandles;
-        private readonly RTHandleMipChain m_MinHandles;
+        private readonly RTHandleMipChain m_FarHandles;
+        private readonly RTHandleMipChain m_NearHandles;
 
         private RenderTextureDescriptor m_Descriptor;
         private DepthPyramidPassData m_PassData = new DepthPyramidPassData();
@@ -56,7 +56,7 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
 
 #if UNITY_EDITOR
         private bool m_Debug = false;
-        private DepthChainType m_DebugChainType = DepthChainType.Max;
+        private DepthChainType m_DebugChainType = DepthChainType.Far;
         private int m_DebugMipLevel = 0;
 #endif
 
@@ -75,8 +75,8 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
             m_Descriptor = DefaultDescriptors.DepthBufferFullScreen();
 
             // Initialize all chains
-            m_MaxHandles = CreateChain();
-            m_MinHandles = CreateChain();
+            m_FarHandles = CreateChain();
+            m_NearHandles = CreateChain();
         }
 
         private RTHandleMipChain CreateChain() => new RTHandleMipChain((ref RTHandle handle, RenderTextureDescriptor desc, int mip) =>
@@ -85,8 +85,8 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
 
         public void Dispose()
         {
-            m_MaxHandles.Dispose();
-            m_MinHandles.Dispose();
+            m_FarHandles.Dispose();
+            m_NearHandles.Dispose();
         }
 
 #if UNITY_EDITOR
@@ -149,22 +149,24 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
             var camera = cameraData.camera;
             var baseRes = new Vector2Int(camera.pixelWidth, camera.pixelHeight);
 
-            if (CheckAndUpdateChain(m_MaxHandles, DepthChainType.Max, baseRes))
-                DepthPyramidProvider.SetGlobalDepthPyramid(DepthChainType.Max, m_MaxHandles, true);
+            if (CheckAndUpdateChain(m_FarHandles, DepthChainType.Far, baseRes))
+                DepthPyramidProvider.SetGlobalDepthPyramid(DepthChainType.Far, m_FarHandles, false);
 
-            if (CheckAndUpdateChain(m_MinHandles, DepthChainType.Min, baseRes))
-                DepthPyramidProvider.SetGlobalDepthPyramid(DepthChainType.Min, m_MinHandles, false);
+            if (CheckAndUpdateChain(m_NearHandles, DepthChainType.Near, baseRes))
+                DepthPyramidProvider.SetGlobalDepthPyramid(DepthChainType.Near, m_NearHandles, true);
 
             m_LastResolution = baseRes;
 
-            RecordChain(renderGraph, m_MaxHandles, DepthChainType.Max, m_KernelMax, srcDepthBuffer, baseRes, depthData);
-            RecordChain(renderGraph, m_MinHandles, DepthChainType.Min, m_KernelMin, srcDepthBuffer, baseRes, null);
+            PassMeta farKernel = DepthPyramidProvider.IsReversedZ ? m_KernelMin : m_KernelMax;
+            PassMeta nearKernel = DepthPyramidProvider.IsReversedZ ? m_KernelMax : m_KernelMin;
+
+            RecordChain(renderGraph, m_FarHandles, DepthChainType.Far, farKernel, srcDepthBuffer, baseRes, depthData.farMips);
+            RecordChain(renderGraph, m_NearHandles, DepthChainType.Near, nearKernel, srcDepthBuffer, baseRes, depthData.nearMips);
 
 #if UNITY_EDITOR
             if (m_Debug)
             {
-                // Select handle based on debug settings
-                var debugChain = m_DebugChainType == DepthChainType.Max ? m_MaxHandles : m_MinHandles;
+                var debugChain = m_DebugChainType == DepthChainType.Far ? m_FarHandles : m_NearHandles;
                 if (m_DebugMipLevel < debugChain.MipCount)
                 {
                     TextureHandle debugHandle = debugChain[m_DebugMipLevel].ToRenderGraphHandle(renderGraph);
@@ -177,16 +179,16 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
         /// <summary>
         /// Internal helper to record the blit and compute passes for a specific depth chain.
         /// </summary>
-        private void RecordChain(RenderGraph renderGraph, RTHandleMipChain handles, DepthChainType type, PassMeta kernel, TextureHandle srcDepth, Vector2Int baseRes, DepthPyramidFrameData depthData)
+        private void RecordChain(RenderGraph renderGraph, RTHandleMipChain handles, DepthChainType type, PassMeta kernel, TextureHandle srcDepth, Vector2Int baseRes, TextureHandleMeta<TextureHandle>[] contextMips)
         {
             if (handles.MipCount == 0) return;
 
             var firstMip = handles[0].ToRenderGraphHandle(renderGraph);
             renderGraph.AddBlitPass(srcDepth, firstMip, Vector2.one, Vector2.zero);
 
-            if (depthData != null)
+            if (contextMips != null)
             {
-                depthData.mips[0] = new TextureHandleMeta<TextureHandle>
+                contextMips[0] = new TextureHandleMeta<TextureHandle>
                 {
                     Handle = firstMip,
                     Meta = DepthPyramidProvider.GetMip(type, 0).Meta
@@ -223,9 +225,9 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
 
                 RenderPassRecorder.AddComputePass(renderGraph, kernel.name, m_PassData);
 
-                if (depthData != null)
+                if (contextMips != null)
                 {
-                    depthData.mips[i] = new TextureHandleMeta<TextureHandle>
+                    contextMips[i] = new TextureHandleMeta<TextureHandle>
                     {
                         Handle = curMip,
                         Meta = mipData.Meta

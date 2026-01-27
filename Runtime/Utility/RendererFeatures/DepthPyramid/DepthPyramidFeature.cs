@@ -18,11 +18,11 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
         private RenderPassEvent m_InjectionPoint = RenderPassEvent.AfterRenderingOpaques;
 
         [Header("Chain Settings")]
-        [Range(1, MipCountMax), SerializeField, InspectorName("Min Mips")]
-        private int m_MinMipCount = 1;
+        [Range(1, MipCountMax), SerializeField, InspectorName("Near Mips")]
+        private int m_NearMipCount = 1;
 
-        [Range(1, MipCountMax), SerializeField, InspectorName("Max Mips")]
-        private int m_MaxMipCount = 1;
+        [Range(1, MipCountMax), SerializeField, InspectorName("Far Mips")]
+        private int m_FarMipCount = 1;
 
 #if UNITY_EDITOR
         [Header("Debug")]
@@ -30,7 +30,7 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
         public bool showDepthPyramid = false;
 
         [Tooltip("Which chain type to visualize.")]
-        public DepthChainType debugChainType = DepthChainType.Max;
+        public DepthChainType debugChainType = DepthChainType.Near;
 
         [Range(0, MipCountMax - 1)]
         [Tooltip("Which mip level of the selected chain to display.")]
@@ -46,8 +46,8 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
 
         private void UdpateMipCount()
         {
-            m_MinMipCount = UpdateMipCount(DepthChainType.Min, m_MinMipCount);
-            m_MaxMipCount = UpdateMipCount(DepthChainType.Max, m_MaxMipCount);
+            m_NearMipCount = UpdateMipCount(DepthChainType.Near, m_NearMipCount);
+            m_FarMipCount = UpdateMipCount(DepthChainType.Far, m_FarMipCount);
         }
 
         private int UpdateMipCount(DepthChainType type, int mipCount)
@@ -73,8 +73,8 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
         {
             int activeMax = debugChainType switch
             {
-                DepthChainType.Min => m_MinMipCount,
-                DepthChainType.Max => m_MaxMipCount,
+                DepthChainType.Near => m_NearMipCount,
+                DepthChainType.Far => m_FarMipCount,
                 _ => 1
             };
             mipLevel = Math.Clamp(mipLevel, 0, Math.Max(0, activeMax - 1));

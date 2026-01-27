@@ -13,19 +13,26 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
     public class DepthPyramidFrameData : ContextItem
     {
         /// <summary>
-        /// Array of render graph texture metadata for each mip level.
-        /// These handles are crucial for the RenderGraph to track read/write dependencies and 
-        /// to insert necessary GPU memory barriers between the generator and consumer passes.
+        /// Metadata for the Near depth chain (closest points).
+        /// Used for effects like SSAO, DoF, and Bilateral Upsampling.
         /// </summary>
-        public TextureHandleMeta<TextureHandle>[] mips = new TextureHandleMeta<TextureHandle>[DepthPyramidProvider.MipCountMax];
+        public TextureHandleMeta<TextureHandle>[] nearMips = new TextureHandleMeta<TextureHandle>[DepthPyramidProvider.MipCountMax];
 
         /// <summary>
-        /// Resets the metadata at the beginning of each frame.
+        /// Metadata for the Far depth chain (furthest points).
+        /// Used for performance optimizations like Empty Space Skipping in Raymarching.
+        /// </summary>
+        public TextureHandleMeta<TextureHandle>[] farMips = new TextureHandleMeta<TextureHandle>[DepthPyramidProvider.MipCountMax];
+
+        /// <summary>
+        /// Resets the metadata for both chains at the beginning of each frame.
         /// Called automatically by the <see cref="ContextContainer"/>.
         /// </summary>
         public override void Reset()
         {
-            Array.Clear(mips, 0, mips.Length);
+            // Clear both arrays to avoid accidental reuse of handles from the previous frame
+            Array.Clear(nearMips, 0, nearMips.Length);
+            Array.Clear(farMips, 0, farMips.Length);
         }
     }
 }

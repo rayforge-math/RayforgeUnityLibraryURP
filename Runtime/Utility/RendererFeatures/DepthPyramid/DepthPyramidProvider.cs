@@ -18,13 +18,13 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
         /// Selects the smallest depth value (nearest point). 
         /// Useful for SSAO and Occlusion Culling. 
         /// </summary>
-        Min,
+        Near,
 
         /// <summary> 
         /// Selects the largest depth value (farthest point). 
         /// Essential for Raymarching (Empty Space Skipping). 
         /// </summary>
-        Max
+        Far
     }
 
     /// <summary>
@@ -47,30 +47,43 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
             public bool IsRequested => RequestedCount > 0;
         }
 
-        private static ChainData s_ChainMin = new ChainData { Suffix = "Min", Mips = Array.Empty<TextureHandleMeta<RTHandle>>() };
-        private static ChainData s_ChainMax = new ChainData { Suffix = "Max", Mips = Array.Empty<TextureHandleMeta<RTHandle>>() };
+        private static ChainData s_ChainNear = new ChainData { Suffix = "Near", Mips = Array.Empty<TextureHandleMeta<RTHandle>>() };
+        private static ChainData s_ChainFar = new ChainData { Suffix = "Far", Mips = Array.Empty<TextureHandleMeta<RTHandle>>() };
 
         private const string k_BaseName = "_" + Globals.CompanyName + "_DepthPyramid";
 
         private static Vector2Int s_CurrentBaseRes;
 
-        internal const uint MinDirty = 1 << 0;
-        internal const uint MaxDirty = 1 << 1;
-        internal const uint AllDirty = MinDirty | MaxDirty;
+        internal const uint NearDirty = 1 << 0;
+        internal const uint FarDirty = 1 << 1;
+        internal const uint AllDirty = NearDirty | FarDirty;
 
         private static DirtyFlags s_Dirty;
+
+        /// <summary> 
+        /// Returns true if the current graphics API uses Reversed-Z (Near=1.0, Far=0.0).
+        /// Used to synchronize math logic between C# and Compute Shaders.
+        /// </summary>
+        public static bool IsReversedZ => s_IsReversedZ;
+        private static bool s_IsReversedZ;
+
+        static DepthPyramidProvider()
+        { 
+            s_IsReversedZ = SystemInfo.usesReversedZBuffer;
+            Shader.SetGlobalInt(k_BaseName + "_IsReversedZ", s_IsReversedZ ? 1 : 0);
+        }
 
         internal static bool IsAnyDirty => s_Dirty.Any;
 
         /// <summary>
-        /// Checks if a specific chain type or any chain at all is marked as dirty.
+        /// Returns the dirty status for a specific semantic chain.
         /// </summary>
         public static bool IsDirty(DepthChainType type)
         {
             return type switch
             {
-                DepthChainType.Min => s_Dirty.IsDirty(MinDirty),
-                DepthChainType.Max => s_Dirty.IsDirty(MaxDirty),
+                DepthChainType.Near => s_Dirty.IsDirty(NearDirty),
+                DepthChainType.Far => s_Dirty.IsDirty(FarDirty),
                 _ => s_Dirty.Any
             };
         }
@@ -89,11 +102,11 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
         {
             switch (type)
             {
-                case DepthChainType.Min:
-                    s_Dirty.Clear(MinDirty);
+                case DepthChainType.Near:
+                    s_Dirty.Clear(NearDirty);
                     break;
-                case DepthChainType.Max:
-                    s_Dirty.Clear(MaxDirty);
+                case DepthChainType.Far:
+                    s_Dirty.Clear(FarDirty);
                     break;
             }
         }
@@ -105,8 +118,8 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
         {
             return type switch
             {
-                DepthChainType.Min => s_ChainMin.RequestedCount,
-                DepthChainType.Max => s_ChainMax.RequestedCount,
+                DepthChainType.Near => s_ChainNear.RequestedCount,
+                DepthChainType.Far => s_ChainFar.RequestedCount,
                 _ => 0
             };
         }
@@ -119,11 +132,11 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
         {
             switch (type)
             {
-                case DepthChainType.Min:
-                    EnsureMipCount(ref s_ChainMin, count, MinDirty, force);
+                case DepthChainType.Near:
+                    EnsureMipCount(ref s_ChainNear, count, NearDirty, force);
                     break;
-                case DepthChainType.Max:
-                    EnsureMipCount(ref s_ChainMax, count, MaxDirty, force);
+                case DepthChainType.Far:
+                    EnsureMipCount(ref s_ChainFar, count, FarDirty, force);
                     break;
             }
         }
@@ -154,8 +167,8 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
         {
             return type switch
             {
-                DepthChainType.Min => s_ChainMin.Mips,
-                DepthChainType.Max => s_ChainMax.Mips,
+                DepthChainType.Near => s_ChainNear.Mips,
+                DepthChainType.Far => s_ChainFar.Mips,
                 _ => throw new ArgumentOutOfRangeException(nameof(type), "Unsupported depth chain type.")
             };
         }
@@ -187,11 +200,11 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
         {
             switch (type)
             {
-                case DepthChainType.Min:
-                    GenerateChain(ref s_ChainMin, baseRes, MinDirty);
+                case DepthChainType.Near:
+                    GenerateChain(ref s_ChainNear, baseRes, NearDirty);
                     break;
-                case DepthChainType.Max:
-                    GenerateChain(ref s_ChainMax, baseRes, MaxDirty);
+                case DepthChainType.Far:
+                    GenerateChain(ref s_ChainFar, baseRes, FarDirty);
                     break;
             }
         }
@@ -239,11 +252,11 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
 
             switch (type)
             {
-                case DepthChainType.Max:
-                    BindChain(ref s_ChainMax, handleChain, setGlobal);
+                case DepthChainType.Near:
+                    BindChain(ref s_ChainNear, handleChain, setGlobal);
                     break;
-                case DepthChainType.Min:
-                    BindChain(ref s_ChainMin, handleChain, setGlobal);
+                case DepthChainType.Far:
+                    BindChain(ref s_ChainFar, handleChain, setGlobal);
                     break;
             }
         }
