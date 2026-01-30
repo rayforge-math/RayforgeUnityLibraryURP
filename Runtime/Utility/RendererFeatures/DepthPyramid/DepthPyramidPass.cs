@@ -10,6 +10,7 @@ using UnityEngine.Rendering;
 using UnityEngine.Rendering.RenderGraphModule;
 using UnityEngine.Rendering.RenderGraphModule.Util;
 using UnityEngine.Rendering.Universal;
+using static Codice.CM.Common.CmCallContext;
 
 namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
 {
@@ -29,6 +30,16 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
             }
         }
 
+        private class CopyPassData : ComputePassData<CopyPassData>
+        {
+            public Vector2 destRes;
+
+            public override void CopyUserData(CopyPassData other)
+            {
+                destRes = other.destRes;
+            }
+        }
+
         private static readonly int kSourceId = Shader.PropertyToID("_Source");
         private static readonly int kDestId = Shader.PropertyToID("_Dest");
         private static readonly int kSourceResId = Shader.PropertyToID("_SourceRes");
@@ -36,15 +47,26 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
 
         private Vector2Int m_LastResolution = new Vector2Int(-1, -1);
 
-        private readonly RTHandleMipChain m_FarHandles;
-        private readonly RTHandleMipChain m_NearHandles;
+        private bool m_RenderFarMips = false;
+        private bool m_RenderNearMips = false;
+        private bool m_RenderHistory = false;
+        private DepthChainType m_HistorySource = DepthChainType.None;
+
+        private readonly UnsafeRTHandleMipChain m_FarHandles;
+        private readonly UnsafeRTHandleMipChain m_NearHandles;
+        private HistoryRTHandles m_HistoryHandles;
 
         private RenderTextureDescriptor m_Descriptor;
-        private DepthPyramidPassData m_PassData = new DepthPyramidPassData();
+        private DepthPyramidPassData m_DownsamplePassData = new DepthPyramidPassData();
+        private CopyPassData m_CopyPassData = new CopyPassData();
+
+        private ComputeShader k_Shader;
 
         private PassMeta m_KernelMin;
         private PassMeta m_KernelMax;
+        private int k_CopyKernelId;
 
+        private const string k_CopyKernel = "Copy";
         private const string k_DownsampleMinKernel = "DownsampleMin";
         private const string k_DownsampleMaxKernel = "DownsampleMax";
 
@@ -55,13 +77,15 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
         }
 
 #if UNITY_EDITOR
-        private bool m_Debug = false;
-        private DepthChainType m_DebugChainType = DepthChainType.Far;
+        private DepthChainType m_DebugChainType = DepthChainType.None;
         private int m_DebugMipLevel = 0;
 #endif
 
         public DepthPyramidPass(ComputeShader shader)
         {
+            k_Shader = shader;
+
+            k_CopyKernelId = shader.FindKernel(k_CopyKernel);
             m_KernelMin = new PassMeta
             {
                 meta = new ComputePassMeta(shader, k_DownsampleMinKernel),
@@ -77,44 +101,83 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
             // Initialize all chains
             m_FarHandles = CreateChain();
             m_NearHandles = CreateChain();
+            m_HistoryHandles = new HistoryRTHandles(
+                (ref RTHandle handle, RenderTextureDescriptor desc, string name) => RenderingUtils.ReAllocateHandleIfNeeded(ref handle, desc, FilterMode.Point, TextureWrapMode.Clamp),
+                null, null);
         }
 
-        private RTHandleMipChain CreateChain() => new RTHandleMipChain((ref RTHandle handle, RenderTextureDescriptor desc, int mip) =>
-            RenderingUtils.ReAllocateHandleIfNeeded(ref handle, desc, FilterMode.Point, TextureWrapMode.Clamp)
+        private UnsafeRTHandleMipChain CreateChain() => new UnsafeRTHandleMipChain(
+            (ref RTHandle handle, RenderTextureDescriptor desc, int mip) => RenderingUtils.ReAllocateHandleIfNeeded(ref handle, desc, FilterMode.Point, TextureWrapMode.Clamp),
+            (ref RTHandle handle) => { RTHandles.Release(handle); }
         );
 
         public void Dispose()
         {
             m_FarHandles.Dispose();
             m_NearHandles.Dispose();
+            m_HistoryHandles.Dispose();
         }
 
 #if UNITY_EDITOR
-        internal void UpdateDebugSettings(bool show, DepthChainType chainType, int mipLevel)
+        internal void UpdateDebugSettings(DepthChainType chainType, int mipLevel)
         {
-            m_Debug = show;
             m_DebugChainType = chainType;
             m_DebugMipLevel = mipLevel;
         }
 #endif
 
-        /// <summary>
-        /// Checks if the RTHandles for a specific chain need to be resized or recreated based on camera resolution or provider settings.
-        /// </summary>
-        /// <param name="chain">The RTHandle mip chain to update.</param>
-        /// <param name="type">The depth chain type (Min/Max).</param>
-        /// <param name="baseRes">Base resolution of the camera.</param>
-        /// <returns>True if the resolution or mip count has changed and the RTHandles were updated, false otherwise.</returns>
-        private bool CheckAndUpdateChain(RTHandleMipChain chain, DepthChainType type, Vector2Int baseRes)
+        private bool UpdateDescriptor(Vector2Int baseRes)
         {
-            bool changed = false;
-
             if (m_LastResolution != baseRes)
             {
                 m_Descriptor.width = baseRes.x;
                 m_Descriptor.height = baseRes.y;
-                changed = true;
+
+                m_LastResolution = baseRes;
+                return true;
             }
+
+            return false;
+        }
+
+        private bool CheckAndUpdateHistory(bool descChanged)
+        {
+            bool isRequested = DepthPyramidProvider.IsHistoryRequested;
+
+            if (!isRequested)
+            {
+                m_HistoryHandles.Dispose();
+                m_HistorySource = DepthChainType.None;
+                return false;
+            }
+
+            var farCount = DepthPyramidProvider.GetRequestedCount(DepthChainType.Far);
+            var nearCount = DepthPyramidProvider.GetRequestedCount(DepthChainType.Near);
+
+            DepthChainType newSource = farCount > 0 ? DepthChainType.Far :
+                                       (nearCount > 0 ? DepthChainType.Near : DepthChainType.None);
+
+            if (descChanged || newSource != m_HistorySource)
+            {
+                m_HistorySource = newSource;
+
+                if (m_HistorySource == DepthChainType.None)
+                {
+                    m_HistoryHandles.ReAllocateHandlesIfNeeded(m_Descriptor);
+                }
+                else
+                {
+                    m_HistoryHandles.ReAllocateHistoryIfNeeded(m_Descriptor);
+                    m_HistoryHandles.DisposeTarget();
+                }
+            }
+
+            return isRequested;
+        }
+
+        private bool UpdateDepthChain(UnsafeRTHandleMipChain chain, DepthChainType type, Vector2Int baseRes, bool descriptorChanged)
+        {
+            bool changed = descriptorChanged;
 
             var requestedCount = DepthPyramidProvider.GetRequestedCount(type);
 
@@ -125,14 +188,17 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
                 else
                     chain.Resize(0);
 
-                changed = true;
+                changed |= true;
             }
 
             if (changed)
-                DepthPyramidProvider.Generate(type, baseRes);
+            {
+                DepthPyramidProvider.GenerateChainMeta(type, baseRes);
+                DepthPyramidProvider.SetGlobalDepthPyramid(type, chain, type == DepthChainType.Near);
+            }
 
             DepthPyramidProvider.ResetDirty(type);
-            return changed;
+            return chain.MipCount > 0;
         }
 
         public override void RecordRenderGraph(RenderGraph renderGraph, ContextContainer frameData)
@@ -149,42 +215,70 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
             var camera = cameraData.camera;
             var baseRes = new Vector2Int(camera.pixelWidth, camera.pixelHeight);
 
-            if (CheckAndUpdateChain(m_FarHandles, DepthChainType.Far, baseRes))
-                DepthPyramidProvider.SetGlobalDepthPyramid(DepthChainType.Far, m_FarHandles, false);
+            bool descChanged = UpdateDescriptor(baseRes);
 
-            if (CheckAndUpdateChain(m_NearHandles, DepthChainType.Near, baseRes))
-                DepthPyramidProvider.SetGlobalDepthPyramid(DepthChainType.Near, m_NearHandles, true);
+            if (DepthPyramidProvider.IsAnyDirty)
+                m_RenderHistory = CheckAndUpdateHistory(descChanged);
 
-            m_LastResolution = baseRes;
+            if (DepthPyramidProvider.IsDirty(DepthChainType.Far))
+                m_RenderFarMips = UpdateDepthChain(m_FarHandles, DepthChainType.Far, baseRes, descChanged);
+            if (DepthPyramidProvider.IsDirty(DepthChainType.Near))
+                m_RenderNearMips = UpdateDepthChain(m_NearHandles, DepthChainType.Near, baseRes, descChanged);
 
             PassMeta farKernel = DepthPyramidProvider.IsReversedZ ? m_KernelMin : m_KernelMax;
             PassMeta nearKernel = DepthPyramidProvider.IsReversedZ ? m_KernelMax : m_KernelMin;
 
-            RecordChain(renderGraph, m_FarHandles, DepthChainType.Far, farKernel, srcDepthBuffer, baseRes, depthData.farMips);
-            RecordChain(renderGraph, m_NearHandles, DepthChainType.Near, nearKernel, srcDepthBuffer, baseRes, depthData.nearMips);
+            if (m_RenderFarMips)
+                RecordChain(renderGraph, m_FarHandles, DepthChainType.Far, farKernel, srcDepthBuffer, baseRes, depthData.farMips);
+            if (m_RenderNearMips)
+                RecordChain(renderGraph, m_NearHandles, DepthChainType.Near, nearKernel, srcDepthBuffer, baseRes, depthData.nearMips);
+
+            if (m_RenderHistory)
+                RecordHistoryPass();
 
 #if UNITY_EDITOR
-            if (m_Debug)
+            if (m_DebugChainType != DepthChainType.None)
             {
-                var debugChain = m_DebugChainType == DepthChainType.Far ? m_FarHandles : m_NearHandles;
-                if (m_DebugMipLevel < debugChain.MipCount)
+                var debugChain = m_DebugChainType == DepthChainType.Far ? depthData.farMips : depthData.nearMips;
+                if (m_DebugMipLevel < debugChain.Length)
                 {
-                    TextureHandle debugHandle = debugChain[m_DebugMipLevel].ToRenderGraphHandle(renderGraph);
-                    renderGraph.AddBlitPass(debugHandle, resourceData.activeColorTexture, Vector2.one, Vector2.zero);
+                    TextureHandle debugHandle = debugChain[m_DebugMipLevel].Handle;
+                    if (debugHandle.IsValid())
+                        renderGraph.AddBlitPass(debugHandle, resourceData.activeColorTexture, Vector2.one, Vector2.zero);
                 }
             }
 #endif
         }
 
-        /// <summary>
-        /// Internal helper to record the blit and compute passes for a specific depth chain.
-        /// </summary>
-        private void RecordChain(RenderGraph renderGraph, RTHandleMipChain handles, DepthChainType type, PassMeta kernel, TextureHandle srcDepth, Vector2Int baseRes, TextureHandleMeta<TextureHandle>[] contextMips)
+        private void RecordCopyPass(RenderGraph renderGraph, TextureHandle source, TextureHandle dest, Vector2Int resolution)
+        {
+            var passMeta = new ComputePassMeta(k_Shader, k_CopyKernelId);
+            passMeta.ThreadGroupsX = Mathf.CeilToInt(resolution.x / 8.0f);
+            passMeta.ThreadGroupsY = Mathf.CeilToInt(resolution.y / 8.0f);
+            m_CopyPassData.PassMeta = passMeta;
+            m_CopyPassData.PushInput(source, kSourceId);
+            m_CopyPassData.PushDestination(dest, kDestId);
+            m_CopyPassData.destRes = resolution;
+            m_CopyPassData.RenderFuncUpdate = static (cmd, data) =>
+            {
+                cmd.SetComputeVectorParam(data.PassMeta.Shader, kDestResId, data.destRes);
+            };
+            RenderPassRecorder.AddComputePass(renderGraph, k_CopyKernel, m_CopyPassData);
+        }
+
+        private void RecordHistoryPass()
+        {
+
+        }
+
+        private void RecordChain(RenderGraph renderGraph, UnsafeRTHandleMipChain handles, DepthChainType type, PassMeta kernel, TextureHandle srcDepth, Vector2Int baseRes, TextureHandleMeta<TextureHandle>[] contextMips)
         {
             if (handles.MipCount == 0) return;
 
             var firstMip = handles[0].ToRenderGraphHandle(renderGraph);
-            renderGraph.AddBlitPass(srcDepth, firstMip, Vector2.one, Vector2.zero);
+
+            // initial blit
+            RecordCopyPass(renderGraph, srcDepth, firstMip, baseRes);
 
             if (contextMips != null)
             {
@@ -211,19 +305,17 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
                 var passMeta = kernel.meta;
                 passMeta.ThreadGroupsX = Mathf.CeilToInt(curRes.x / 8.0f);
                 passMeta.ThreadGroupsY = Mathf.CeilToInt(curRes.y / 8.0f);
-
-                m_PassData.PushInput(prevMip, kSourceId);
-                m_PassData.PushDestination(curMip, kDestId);
-                m_PassData.sourceRes = prevRes;
-                m_PassData.destRes = curRes;
-                m_PassData.PassMeta = passMeta;
-                m_PassData.RenderFuncUpdate = static (cmd, data) =>
+                m_DownsamplePassData.PassMeta = passMeta;
+                m_DownsamplePassData.PushInput(prevMip, kSourceId);
+                m_DownsamplePassData.PushDestination(curMip, kDestId);
+                m_DownsamplePassData.sourceRes = prevRes;
+                m_DownsamplePassData.destRes = curRes;
+                m_DownsamplePassData.RenderFuncUpdate = static (cmd, data) =>
                 {
                     cmd.SetComputeVectorParam(data.PassMeta.Shader, kSourceResId, data.sourceRes);
                     cmd.SetComputeVectorParam(data.PassMeta.Shader, kDestResId, data.destRes);
                 };
-
-                RenderPassRecorder.AddComputePass(renderGraph, kernel.name, m_PassData);
+                RenderPassRecorder.AddComputePass(renderGraph, kernel.name, m_DownsamplePassData);
 
                 if (contextMips != null)
                 {
