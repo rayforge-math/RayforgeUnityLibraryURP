@@ -25,6 +25,12 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
         public TextureHandleMeta<TextureHandle>[] farMips = new TextureHandleMeta<TextureHandle>[DepthPyramidProvider.MipCountMax];
 
         /// <summary>
+        /// The depth history from the PREVIOUS frame.
+        /// Used for temporal effects, reprojection, and temporal stability.
+        /// </summary>
+        public TextureHandleMeta<TextureHandle> historyDepth;
+
+        /// <summary>
         /// Resets the metadata for both chains at the beginning of each frame.
         /// Called automatically by the <see cref="ContextContainer"/>.
         /// </summary>

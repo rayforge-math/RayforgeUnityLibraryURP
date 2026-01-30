@@ -5,6 +5,8 @@ using Rayforge.Core.Utility.RenderGraphs.Collections;
 using Rayforge.Core.Utility.RenderGraphs.Helpers;
 using Rayforge.Core.Utility.RenderGraphs.Rendering;
 using System;
+using System.Security.Claims;
+using UnityEditor;
 using UnityEngine;
 using UnityEngine.Rendering;
 using UnityEngine.Rendering.RenderGraphModule;
@@ -50,7 +52,6 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
         private bool m_RenderFarMips = false;
         private bool m_RenderNearMips = false;
         private bool m_RenderHistory = false;
-        private DepthChainType m_HistorySource = DepthChainType.None;
 
         private readonly UnsafeRTHandleMipChain m_FarHandles;
         private readonly UnsafeRTHandleMipChain m_NearHandles;
@@ -140,53 +141,22 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
             return false;
         }
 
-        private bool CheckAndUpdateHistory(bool descChanged)
+        private bool UpdateDepthChain(UnsafeRTHandleMipChain chain, DepthChainType type, Vector2Int baseRes, bool descChanged)
         {
-            bool isRequested = DepthPyramidProvider.IsHistoryRequested;
-
-            if (!isRequested)
-            {
-                m_HistoryHandles.Dispose();
-                m_HistorySource = DepthChainType.None;
-                return false;
-            }
-
-            var farCount = DepthPyramidProvider.GetRequestedCount(DepthChainType.Far);
-            var nearCount = DepthPyramidProvider.GetRequestedCount(DepthChainType.Near);
-
-            DepthChainType newSource = farCount > 0 ? DepthChainType.Far :
-                                       (nearCount > 0 ? DepthChainType.Near : DepthChainType.None);
-
-            if (descChanged || newSource != m_HistorySource)
-            {
-                m_HistorySource = newSource;
-
-                if (m_HistorySource == DepthChainType.None)
-                {
-                    m_HistoryHandles.ReAllocateHandlesIfNeeded(m_Descriptor);
-                }
-                else
-                {
-                    m_HistoryHandles.ReAllocateHistoryIfNeeded(m_Descriptor);
-                    m_HistoryHandles.DisposeTarget();
-                }
-            }
-
-            return isRequested;
-        }
-
-        private bool UpdateDepthChain(UnsafeRTHandleMipChain chain, DepthChainType type, Vector2Int baseRes, bool descriptorChanged)
-        {
-            bool changed = descriptorChanged;
+            bool changed = descChanged;
 
             var requestedCount = DepthPyramidProvider.GetRequestedCount(type);
 
             if (chain.MipCount != requestedCount)
             {
                 if (requestedCount > 0)
-                    chain.Create(m_Descriptor, requestedCount);
+                {
+                    chain.CreateUnsafe(m_Descriptor, 1, requestedCount - 1, true);
+                }
                 else
+                {
                     chain.Resize(0);
+                }
 
                 changed |= true;
             }
@@ -194,11 +164,37 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
             if (changed)
             {
                 DepthPyramidProvider.GenerateChainMeta(type, baseRes);
-                DepthPyramidProvider.SetGlobalDepthPyramid(type, chain, type == DepthChainType.Near);
             }
 
-            DepthPyramidProvider.ResetDirty(type);
             return chain.MipCount > 0;
+        }
+
+        private bool UpdateHistory(Vector2Int baseRes, bool descChanged)
+        {
+            bool isRequested = DepthPyramidProvider.IsHistoryRequested;
+            bool anyChainActive = m_RenderFarMips || m_RenderNearMips;
+
+            if (!isRequested && !anyChainActive)
+            {
+                m_HistoryHandles.Dispose();
+                return false;
+            }
+
+            if (!isRequested && anyChainActive)
+            {
+                m_HistoryHandles.ReAllocateTargetIfNeeded(m_Descriptor);
+                m_HistoryHandles.DisposeHistory();
+                return false;
+            }
+
+            if (isRequested)
+            {
+                m_HistoryHandles.ReAllocateHandlesIfNeeded(m_Descriptor);
+                DepthPyramidProvider.GenerateHistoryMeta(baseRes);
+                return true;
+            }
+
+            return false;
         }
 
         public override void RecordRenderGraph(RenderGraph renderGraph, ContextContainer frameData)
@@ -217,24 +213,49 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
 
             bool descChanged = UpdateDescriptor(baseRes);
 
-            if (DepthPyramidProvider.IsAnyDirty)
-                m_RenderHistory = CheckAndUpdateHistory(descChanged);
-
-            if (DepthPyramidProvider.IsDirty(DepthChainType.Far))
+            if (DepthPyramidProvider.IsDirty(DepthChainType.Far) || descChanged)
                 m_RenderFarMips = UpdateDepthChain(m_FarHandles, DepthChainType.Far, baseRes, descChanged);
-            if (DepthPyramidProvider.IsDirty(DepthChainType.Near))
+            if (DepthPyramidProvider.IsDirty(DepthChainType.Near) || descChanged)
                 m_RenderNearMips = UpdateDepthChain(m_NearHandles, DepthChainType.Near, baseRes, descChanged);
+
+            if (DepthPyramidProvider.IsAnyDirty || descChanged)
+                m_RenderHistory = UpdateHistory(baseRes, descChanged);
+
+            DepthPyramidProvider.ResetDirty();
+
+            if (!(m_RenderFarMips || m_RenderNearMips || m_RenderHistory))
+                return;
+
+            if (m_RenderHistory)
+            {
+                m_HistoryHandles.Swap();
+                DepthPyramidProvider.SetHistoryDepth(m_HistoryHandles.History);
+                var meta = DepthPyramidProvider.GetHistoryDepth();
+                depthData.historyDepth = new TextureHandleMeta<TextureHandle>
+                {
+                    Handle = m_HistoryHandles.History.ToRenderGraphHandle(renderGraph),
+                    Meta = meta.Meta
+                };
+            }
+
+            var RTmip0 = m_HistoryHandles.Target;
+            var mip0 = RTmip0.ToRenderGraphHandle(renderGraph);
+
+            RecordCopyPass(renderGraph, srcDepthBuffer, mip0, baseRes);
 
             PassMeta farKernel = DepthPyramidProvider.IsReversedZ ? m_KernelMin : m_KernelMax;
             PassMeta nearKernel = DepthPyramidProvider.IsReversedZ ? m_KernelMax : m_KernelMin;
 
             if (m_RenderFarMips)
-                RecordChain(renderGraph, m_FarHandles, DepthChainType.Far, farKernel, srcDepthBuffer, baseRes, depthData.farMips);
+            {
+                m_FarHandles.SetHandleUnsafe(0, RTmip0);
+                RecordChain(renderGraph, m_FarHandles, DepthChainType.Far, farKernel, baseRes, depthData.farMips);
+            }
             if (m_RenderNearMips)
-                RecordChain(renderGraph, m_NearHandles, DepthChainType.Near, nearKernel, srcDepthBuffer, baseRes, depthData.nearMips);
-
-            if (m_RenderHistory)
-                RecordHistoryPass();
+            {
+                m_NearHandles.SetHandleUnsafe(0, RTmip0);
+                RecordChain(renderGraph, m_NearHandles, DepthChainType.Near, nearKernel, baseRes, depthData.nearMips);
+            }
 
 #if UNITY_EDITOR
             if (m_DebugChainType != DepthChainType.None)
@@ -266,19 +287,11 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
             RenderPassRecorder.AddComputePass(renderGraph, k_CopyKernel, m_CopyPassData);
         }
 
-        private void RecordHistoryPass()
-        {
-
-        }
-
-        private void RecordChain(RenderGraph renderGraph, UnsafeRTHandleMipChain handles, DepthChainType type, PassMeta kernel, TextureHandle srcDepth, Vector2Int baseRes, TextureHandleMeta<TextureHandle>[] contextMips)
+        private void RecordChain(RenderGraph renderGraph, UnsafeRTHandleMipChain handles, DepthChainType type, PassMeta kernel, Vector2Int baseRes, TextureHandleMeta<TextureHandle>[] contextMips)
         {
             if (handles.MipCount == 0) return;
 
             var firstMip = handles[0].ToRenderGraphHandle(renderGraph);
-
-            // initial blit
-            RecordCopyPass(renderGraph, srcDepth, firstMip, baseRes);
 
             if (contextMips != null)
             {
@@ -329,6 +342,8 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
                 prevMip = curMip;
                 prevRes = curRes;
             }
+
+            DepthPyramidProvider.SetGlobalDepthPyramid(type, handles, type == DepthChainType.Near);
         }
     }
 }

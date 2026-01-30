@@ -320,6 +320,15 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
         }
 
         /// <summary>
+        /// Registers the physical <see cref="RTHandle"/> for the depth history (Frame N-1).
+        /// This should be called after the History-Swap to ensure shaders and subsequent passes
+        /// access the correct temporal data.
+        /// </summary>
+        /// <param name="history">The persistent RTHandle containing the previous frame's depth information.</param>
+        internal static void SetHistoryDepth(RTHandle history)
+            => s_HistoryDepth.Handle = history;
+
+        /// <summary>
         /// Binds a specific RTHandleMipChain to the provider's metadata.
         /// </summary>
         /// <param name="type">The type of the chain being bound (Min, Max, or Point).</param>
