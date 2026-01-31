@@ -143,11 +143,10 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
 
         private bool UpdateDepthChain(UnsafeRTHandleMipChain chain, DepthChainType type, Vector2Int baseRes, bool descChanged)
         {
-            bool changed = descChanged;
-
             var requestedCount = DepthPyramidProvider.GetRequestedCount(type);
+            bool needsRecreation = descChanged || (chain.MipCount != requestedCount);
 
-            if (chain.MipCount != requestedCount)
+            if (needsRecreation)
             {
                 if (requestedCount > 0)
                 {
@@ -158,11 +157,6 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
                     chain.Resize(0);
                 }
 
-                changed |= true;
-            }
-
-            if (changed)
-            {
                 DepthPyramidProvider.GenerateChainMeta(type, baseRes);
             }
 
@@ -180,7 +174,7 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
                 return false;
             }
 
-            if (!isRequested && anyChainActive)
+            if (!isRequested)
             {
                 m_HistoryHandles.ReAllocateTargetIfNeeded(m_Descriptor);
                 m_HistoryHandles.DisposeHistory();

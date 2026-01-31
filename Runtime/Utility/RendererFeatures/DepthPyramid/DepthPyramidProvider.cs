@@ -75,7 +75,7 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
         private static bool s_IsReversedZ;
 
         static DepthPyramidProvider()
-        { 
+        {
             s_IsReversedZ = SystemInfo.usesReversedZBuffer;
             Shader.SetGlobalInt(k_BaseName + "_IsReversedZ", s_IsReversedZ ? 1 : 0);
         }
