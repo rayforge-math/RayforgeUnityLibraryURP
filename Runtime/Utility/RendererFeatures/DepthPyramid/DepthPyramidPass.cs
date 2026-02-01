@@ -1,18 +1,14 @@
-﻿using Rayforge.Core.Diagnostics;
-using Rayforge.Core.Rendering.Helpers;
+﻿using Rayforge.Core.Rendering.Helpers;
 using Rayforge.Core.Rendering.Passes;
 using Rayforge.Core.Utility.RenderGraphs.Collections;
 using Rayforge.Core.Utility.RenderGraphs.Helpers;
 using Rayforge.Core.Utility.RenderGraphs.Rendering;
 using System;
-using System.Security.Claims;
-using UnityEditor;
 using UnityEngine;
 using UnityEngine.Rendering;
 using UnityEngine.Rendering.RenderGraphModule;
 using UnityEngine.Rendering.RenderGraphModule.Util;
 using UnityEngine.Rendering.Universal;
-using static Codice.CM.Common.CmCallContext;
 
 namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
 {
