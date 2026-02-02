@@ -11,23 +11,21 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
         public const int MipCountMax = DepthPyramidProvider.MipCountMax;
         private const string k_ShaderName = "DepthPyramid";
         private static readonly string k_FullShaderName = ResourcePaths.ShaderResourceFolder + k_ShaderName;
-        private const ScriptableRenderPassInput k_PassInput = ScriptableRenderPassInput.Depth;
+        private const ScriptableRenderPassInput k_PassInput = ScriptableRenderPassInput.Depth | ScriptableRenderPassInput.Color;
 
         [SerializeField, InspectorName("Injection Point")]
         [Tooltip("Recommended: AfterRenderingOpaques.")]
         private RenderPassEvent m_InjectionPoint = RenderPassEvent.AfterRenderingOpaques;
 
         [Header("Chain Settings")]
-        [Range(1, MipCountMax), SerializeField, InspectorName("Near Mips")]
-        private int m_NearMipCount = 1;
+        [Range(0, MipCountMax), SerializeField, InspectorName("Near Mips")]
+        private int m_NearMipCount = -1;
 
-        [Range(1, MipCountMax), SerializeField, InspectorName("Far Mips")]
-        private int m_FarMipCount = 1;
+        [Range(0, MipCountMax), SerializeField, InspectorName("Far Mips")]
+        private int m_FarMipCount = -1;
 
 #if UNITY_EDITOR
         [Header("Debug")]
-        [Tooltip("Toggle to visualize a specific depth chain in the editor.")]
-        public bool showDepthPyramid = false;
 
         [Tooltip("Which chain type to visualize.")]
         public DepthChainType debugChainType = DepthChainType.Near;
@@ -38,7 +36,12 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
 #endif
 
 #if UNITY_EDITOR
-        public void OnValidate()
+        private void OnValidate()
+        {
+            UpdateUI();
+        }
+
+        private void UpdateUI()
         {
             UdpateMipCount();
             UdpateMipLevel();
@@ -46,27 +49,8 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
 
         private void UdpateMipCount()
         {
-            m_NearMipCount = UpdateMipCount(DepthChainType.Near, m_NearMipCount);
-            m_FarMipCount = UpdateMipCount(DepthChainType.Far, m_FarMipCount);
-        }
-
-        private int UpdateMipCount(DepthChainType type, int mipCount)
-        {
-            var dirty = DepthPyramidProvider.IsDirty(type);
-            var current = DepthPyramidProvider.GetRequestedCount(type);
-
-            if(mipCount != current)
-            {
-                if (dirty)
-                {
-                    mipCount = current;
-                }
-                else
-                {
-                    DepthPyramidProvider.EnsureMipCount(type, mipCount, true);
-                }
-            }
-            return mipCount;
+            m_NearMipCount = DepthPyramidProvider.GetRequestedCount(DepthChainType.Near);
+            m_FarMipCount = DepthPyramidProvider.GetRequestedCount(DepthChainType.Far);
         }
 
         private void UdpateMipLevel()
@@ -111,21 +95,17 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
             {
                 m_RenderPass.renderPassEvent = m_InjectionPoint;
 
-                var passInput = k_PassInput;
 #if UNITY_EDITOR
+                UpdateUI();
+                m_RenderPass.UpdateDebugSettings(debugChainType, mipLevel);
 
-                UdpateMipCount();
-                UdpateMipLevel();
-                m_RenderPass.UpdateDebugSettings(showDepthPyramid, debugChainType, mipLevel);
-
-                if (showDepthPyramid)
+                if (debugChainType != DepthChainType.None)
                 {
                     m_RenderPass.renderPassEvent = RenderPassEvent.AfterRenderingPostProcessing;
-                    passInput |= ScriptableRenderPassInput.Color;
                 }
 #endif
 
-                m_RenderPass.ConfigureInput(passInput);
+                m_RenderPass.ConfigureInput(k_PassInput);
                 renderer.EnqueuePass(m_RenderPass);
             }
         }

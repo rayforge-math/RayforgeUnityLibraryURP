@@ -14,6 +14,8 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
     /// </summary>
     public enum DepthChainType
     {
+        None,
+
         /// <summary> 
         /// Selects the smallest depth value (nearest point). 
         /// Useful for SSAO and Occlusion Culling. 
@@ -50,9 +52,13 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
         private static ChainData s_ChainNear = new ChainData { Suffix = "Near", Mips = Array.Empty<TextureHandleMeta<RTHandle>>() };
         private static ChainData s_ChainFar = new ChainData { Suffix = "Far", Mips = Array.Empty<TextureHandleMeta<RTHandle>>() };
 
+        private static TextureHandleMeta<RTHandle> s_HistoryDepth;
+        private static bool s_HistoryRequested;
+
         private const string k_BaseName = "_" + Globals.CompanyName + "_DepthPyramid";
 
-        private static Vector2Int s_CurrentBaseRes;
+        private static Vector2Int s_BaseResNear;
+        private static Vector2Int s_BaseResFar;
 
         internal const uint NearDirty = 1 << 0;
         internal const uint FarDirty = 1 << 1;
@@ -68,7 +74,7 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
         private static bool s_IsReversedZ;
 
         static DepthPyramidProvider()
-        { 
+        {
             s_IsReversedZ = SystemInfo.usesReversedZBuffer;
             Shader.SetGlobalInt(k_BaseName + "_IsReversedZ", s_IsReversedZ ? 1 : 0);
         }
@@ -78,7 +84,7 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
         /// <summary>
         /// Returns the dirty status for a specific semantic chain.
         /// </summary>
-        public static bool IsDirty(DepthChainType type)
+        internal static bool IsDirty(DepthChainType type)
         {
             return type switch
             {
@@ -112,6 +118,12 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
         }
 
         /// <summary>
+        /// Returns true if any feature has requested a persistent depth history.
+        /// Use this in your Render Pass to decide whether to perform a CopyTexture.
+        /// </summary>
+        public static bool IsHistoryRequested => s_HistoryRequested;
+
+        /// <summary>
         /// Helper to access the current requested count for a specific chain.
         /// </summary>
         public static int GetRequestedCount(DepthChainType type)
@@ -122,6 +134,32 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
                 DepthChainType.Far => s_ChainFar.RequestedCount,
                 _ => 0
             };
+        }
+
+        /// <summary>
+        /// Returns the base resolution for which the specific chain was last generated.
+        /// </summary>
+        public static Vector2Int GetBaseResolution(DepthChainType type)
+        {
+            return type switch
+            {
+                DepthChainType.Near => s_BaseResNear,
+                DepthChainType.Far => s_BaseResFar,
+                _ => Vector2Int.zero
+            };
+        }
+
+        /// <summary>
+        /// Private method to update the resolution. 
+        /// This replaces the "private set" logic for static fields.
+        /// </summary>
+        private static void SetBaseResolution(DepthChainType type, Vector2Int res)
+        {
+            switch (type)
+            {
+                case DepthChainType.Near: s_BaseResNear = res; break;
+                case DepthChainType.Far: s_BaseResFar = res; break;
+            }
         }
 
         /// <summary>
@@ -142,20 +180,44 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
         }
 
         /// <summary>
-        /// Internal method to handle array resizing and bitwise dirty flag updates.
+        /// Completely resets the requested counts and metadata for a specific chain or all chains.
+        /// Useful when a feature is disabled or the rendering context changes significantly.
         /// </summary>
-        private static void EnsureMipCount(ref ChainData chain, int count, uint flag, bool force = false)
+        /// <param name="type">The chain to reset. Use 'None' to only reset history, or a specific chain type.</param>
+        public static void DisableDepthChain(DepthChainType type = DepthChainType.None)
         {
-            count = Math.Clamp(count, 0, MipCountMax);
-
-            if (force || chain.RequestedCount < count)
+            switch (type)
             {
-                if (chain.RequestedCount != count)
-                {
-                    chain.RequestedCount = count;
-                    s_Dirty.MarkDirty(flag);
-                }
+                case DepthChainType.Near:
+                    ResetChainData(ref s_ChainNear, NearDirty);
+                    break;
+                case DepthChainType.Far:
+                    ResetChainData(ref s_ChainFar, FarDirty);
+                    break;
             }
+        }
+
+        /// <summary>
+        /// Requests that the depth history (full resolution) be maintained.
+        /// </summary>
+        public static void RequestDepthHistory()
+        {
+            if (!s_HistoryRequested)
+            {
+                s_HistoryRequested = true;
+                s_Dirty.MarkDirty(AllDirty);
+            }
+        }
+
+        /// <summary>
+        /// Explicitly disables the depth history requirement.
+        /// Should be called when features like TAA are turned off.
+        /// </summary>
+        public static void DisableDepthHistory()
+        {
+            s_HistoryRequested = false;
+            s_HistoryDepth = default;
+            s_Dirty.MarkDirty(AllDirty);
         }
 
         /// <summary>
@@ -191,34 +253,90 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
         }
 
         /// <summary>
+        /// Returns the metadata for the depth history texture.
+        /// </summary>
+        public static TextureHandleMeta<RTHandle> GetHistoryDepth() => s_HistoryDepth;
+
+        /// <summary>
+        /// Internal method to handle array resizing and bitwise dirty flag updates.
+        /// </summary>
+        private static void EnsureMipCount(ref ChainData chain, int count, uint flag, bool force = false)
+        {
+            count = Math.Clamp(count, 0, MipCountMax);
+
+            if (force || chain.RequestedCount < count)
+            {
+                if (chain.RequestedCount != count)
+                {
+                    chain.RequestedCount = count;
+                    s_Dirty.MarkDirty(flag);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Returns a reference to the actual chain data. 
+        /// Necessary to modify the Mips array or RequestedCount directly.
+        /// </summary>
+        private static ref ChainData GetChainRef(DepthChainType type)
+        {
+            if (type == DepthChainType.Near) return ref s_ChainNear;
+            if (type == DepthChainType.Far) return ref s_ChainFar;
+
+            throw new ArgumentOutOfRangeException(nameof(type), "Cannot return ref to invalid chain type.");
+        }
+
+        /// <summary>
         /// Recreates the metadata array for a specific chain type based on the current requested count.
         /// Texture handles are initialized as null until the pass binds them.
         /// </summary>
         /// <param name="type">The specific depth chain to generate.</param>
         /// <param name="baseRes">Base resolution (usually the camera pixel rect).</param>
-        internal static void Generate(DepthChainType type, Vector2Int baseRes)
+        internal static void GenerateChainMeta(DepthChainType type, Vector2Int baseRes)
         {
             switch (type)
             {
                 case DepthChainType.Near:
-                    GenerateChain(ref s_ChainNear, baseRes, NearDirty);
+                    GenerateChainMeta(type, baseRes, NearDirty);
                     break;
                 case DepthChainType.Far:
-                    GenerateChain(ref s_ChainFar, baseRes, FarDirty);
+                    GenerateChainMeta(type, baseRes, FarDirty);
                     break;
             }
         }
 
         /// <summary>
+        /// Internal helper to initialize history metadata independently of mip chains.
+        /// </summary>
+        internal static void GenerateHistoryMeta(Vector2Int baseRes)
+        {
+            if (!s_HistoryRequested) return;
+
+            string name = k_BaseName + "_History";
+
+            var ids = new TextureIds
+            {
+                texture = Shader.PropertyToID(name),
+                texelSize = Shader.PropertyToID($"{name}_TexelSize")
+            };
+
+            var texelSize = new Vector4(1f / baseRes.x, 1f / baseRes.y, (float)baseRes.x, (float)baseRes.y);
+
+            s_HistoryDepth = new TextureHandleMeta<RTHandle>(ids, name, texelSize, null);
+        }
+
+        /// <summary>
         /// Internal helper that performs the actual array allocation and metadata calculation.
         /// </summary>
-        private static void GenerateChain(ref ChainData chain, Vector2Int baseRes, uint flag)
+        private static void GenerateChainMeta(DepthChainType type, Vector2Int baseRes, uint flag)
         {
-            if (s_CurrentBaseRes == baseRes && !s_Dirty.IsDirty(flag))
+            var curBaseRes = GetBaseResolution(type);
+            if (curBaseRes == baseRes && !s_Dirty.IsDirty(flag))
                 return;
 
-            s_CurrentBaseRes = baseRes;
+            SetBaseResolution(type, baseRes);
 
+            ref ChainData chain = ref GetChainRef(type);
             Array.Resize(ref chain.Mips, chain.RequestedCount);
 
             if (!chain.IsRequested) return;
@@ -241,12 +359,21 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
         }
 
         /// <summary>
+        /// Registers the physical <see cref="RTHandle"/> for the depth history (Frame N-1).
+        /// This should be called after the History-Swap to ensure shaders and subsequent passes
+        /// access the correct temporal data.
+        /// </summary>
+        /// <param name="history">The persistent RTHandle containing the previous frame's depth information.</param>
+        internal static void SetHistoryDepth(RTHandle history)
+            => s_HistoryDepth.Handle = history;
+
+        /// <summary>
         /// Binds a specific RTHandleMipChain to the provider's metadata.
         /// </summary>
         /// <param name="type">The type of the chain being bound (Min, Max, or Point).</param>
         /// <param name="handleChain">The actual RTHandle chain containing the textures.</param>
         /// <param name="setGlobal">If true, sets the textures and texel sizes as global shader properties.</param>
-        internal static void SetGlobalDepthPyramid(DepthChainType type, RTHandleMipChain handleChain, bool setGlobal = false)
+        internal static void SetGlobalDepthPyramid(DepthChainType type, UnsafeRTHandleMipChain handleChain, bool setGlobal = false)
         {
             if (handleChain == null) return;
 
@@ -265,7 +392,7 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
         /// Synchronizes RTHandles from a MipChain into the metadata structs.
         /// Optionally sets the handles as global shader properties (usually only for the Max/Main chain).
         /// </summary>
-        private static void BindChain(ref ChainData chain, RTHandleMipChain handleChain, bool setGlobal)
+        private static void BindChain(ref ChainData chain, UnsafeRTHandleMipChain handleChain, bool setGlobal)
         {
             if (!chain.IsRequested || handleChain == null) return;
 
@@ -287,6 +414,17 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
                     }
                 }
             }
+        }
+
+        /// <summary>
+        /// Internal helper to wipe a specific chain's metadata and request status.
+        /// </summary>
+        private static void ResetChainData(ref ChainData chain, uint flag)
+        {
+            chain.RequestedCount = 0;
+            chain.Mips = Array.Empty<TextureHandleMeta<RTHandle>>();
+
+            s_Dirty.MarkDirty(flag);
         }
     }
 }

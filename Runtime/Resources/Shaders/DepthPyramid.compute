@@ -1,4 +1,5 @@
 // Kernels for the different depth pyramid chains
+#pragma kernel Copy
 #pragma kernel DownsampleMin
 #pragma kernel DownsampleMax
 
@@ -37,6 +38,23 @@ float4 GatherSamples(uint2 id)
     samples.z = _Source[c01].r;
     samples.w = _Source[c11].r;
     return samples;
+}
+
+/**
+ * @brief Simple 1:1 copy kernel.
+ * Used for the initial blit from Hardware Depth to the first pyramid level
+ * or the history target.
+ */
+[numthreads(8, 8, 1)]
+void Copy(uint3 id : SV_DispatchThreadID)
+{
+    // Bounds check for the destination texture
+    if (id.x >= _DestRes.x || id.y >= _DestRes.y)
+        return;
+
+    // Direct 1:1 read/write
+    // We don't use GatherSamples here as we want the exact point value.
+    _Dest[id.xy] = _Source[id.xy].r;
 }
 
 /**
