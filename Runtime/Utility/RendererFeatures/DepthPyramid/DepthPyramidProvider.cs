@@ -57,7 +57,8 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
 
         private const string k_BaseName = "_" + Globals.CompanyName + "_DepthPyramid";
 
-        private static Vector2Int s_CurrentBaseRes;
+        private static Vector2Int s_BaseResNear;
+        private static Vector2Int s_BaseResFar;
 
         internal const uint NearDirty = 1 << 0;
         internal const uint FarDirty = 1 << 1;
@@ -133,6 +134,32 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
                 DepthChainType.Far => s_ChainFar.RequestedCount,
                 _ => 0
             };
+        }
+
+        /// <summary>
+        /// Returns the base resolution for which the specific chain was last generated.
+        /// </summary>
+        public static Vector2Int GetBaseResolution(DepthChainType type)
+        {
+            return type switch
+            {
+                DepthChainType.Near => s_BaseResNear,
+                DepthChainType.Far => s_BaseResFar,
+                _ => Vector2Int.zero
+            };
+        }
+
+        /// <summary>
+        /// Private method to update the resolution. 
+        /// This replaces the "private set" logic for static fields.
+        /// </summary>
+        private static void SetBaseResolution(DepthChainType type, Vector2Int res)
+        {
+            switch (type)
+            {
+                case DepthChainType.Near: s_BaseResNear = res; break;
+                case DepthChainType.Far: s_BaseResFar = res; break;
+            }
         }
 
         /// <summary>
@@ -248,6 +275,18 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
         }
 
         /// <summary>
+        /// Returns a reference to the actual chain data. 
+        /// Necessary to modify the Mips array or RequestedCount directly.
+        /// </summary>
+        private static ref ChainData GetChainRef(DepthChainType type)
+        {
+            if (type == DepthChainType.Near) return ref s_ChainNear;
+            if (type == DepthChainType.Far) return ref s_ChainFar;
+
+            throw new ArgumentOutOfRangeException(nameof(type), "Cannot return ref to invalid chain type.");
+        }
+
+        /// <summary>
         /// Recreates the metadata array for a specific chain type based on the current requested count.
         /// Texture handles are initialized as null until the pass binds them.
         /// </summary>
@@ -258,10 +297,10 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
             switch (type)
             {
                 case DepthChainType.Near:
-                    GenerateChainMeta(ref s_ChainNear, baseRes, NearDirty);
+                    GenerateChainMeta(type, baseRes, NearDirty);
                     break;
                 case DepthChainType.Far:
-                    GenerateChainMeta(ref s_ChainFar, baseRes, FarDirty);
+                    GenerateChainMeta(type, baseRes, FarDirty);
                     break;
             }
         }
@@ -289,13 +328,15 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
         /// <summary>
         /// Internal helper that performs the actual array allocation and metadata calculation.
         /// </summary>
-        private static void GenerateChainMeta(ref ChainData chain, Vector2Int baseRes, uint flag)
+        private static void GenerateChainMeta(DepthChainType type, Vector2Int baseRes, uint flag)
         {
-            if (s_CurrentBaseRes == baseRes && !s_Dirty.IsDirty(flag))
+            var curBaseRes = GetBaseResolution(type);
+            if (curBaseRes == baseRes && !s_Dirty.IsDirty(flag))
                 return;
 
-            s_CurrentBaseRes = baseRes;
+            SetBaseResolution(type, baseRes);
 
+            ref ChainData chain = ref GetChainRef(type);
             Array.Resize(ref chain.Mips, chain.RequestedCount);
 
             if (!chain.IsRequested) return;
