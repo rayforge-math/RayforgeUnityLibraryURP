@@ -26,7 +26,12 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
         /// Selects the largest depth value (farthest point). 
         /// Essential for Raymarching (Empty Space Skipping). 
         /// </summary>
-        Far
+        Far,
+
+        /// <summary>
+        /// Selects the depth value with TAA jitter applied.
+        /// </summary>
+        Jittered
     }
 
     /// <summary>
@@ -51,6 +56,7 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
 
         private static ChainData s_ChainNear = new ChainData { Suffix = "Near", Mips = Array.Empty<TextureHandleMeta<RTHandle>>() };
         private static ChainData s_ChainFar = new ChainData { Suffix = "Far", Mips = Array.Empty<TextureHandleMeta<RTHandle>>() };
+        private static ChainData s_ChainJittered = new ChainData { Suffix = "Jittered", Mips = Array.Empty<TextureHandleMeta<RTHandle>>() };
 
         private static TextureHandleMeta<RTHandle> s_HistoryDepth;
         private static bool s_HistoryRequested;
@@ -59,10 +65,12 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
 
         private static Vector2Int s_BaseResNear;
         private static Vector2Int s_BaseResFar;
+        private static Vector2Int s_BaseResJittered;
 
         internal const uint NearDirty = 1 << 0;
         internal const uint FarDirty = 1 << 1;
-        internal const uint AllDirty = NearDirty | FarDirty;
+        internal const uint JitteredDirty = 1 << 2;
+        internal const uint AllDirty = NearDirty | FarDirty | JitteredDirty;
 
         private static DirtyFlags s_Dirty;
 
@@ -90,6 +98,7 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
             {
                 DepthChainType.Near => s_Dirty.IsDirty(NearDirty),
                 DepthChainType.Far => s_Dirty.IsDirty(FarDirty),
+                DepthChainType.Jittered => s_Dirty.IsDirty(JitteredDirty),
                 _ => s_Dirty.Any
             };
         }
@@ -114,6 +123,9 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
                 case DepthChainType.Far:
                     s_Dirty.Clear(FarDirty);
                     break;
+                case DepthChainType.Jittered:
+                    s_Dirty.Clear(JitteredDirty);
+                    break;
             }
         }
 
@@ -132,6 +144,7 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
             {
                 DepthChainType.Near => s_ChainNear.RequestedCount,
                 DepthChainType.Far => s_ChainFar.RequestedCount,
+                DepthChainType.Jittered => s_ChainJittered.RequestedCount,
                 _ => 0
             };
         }
@@ -145,6 +158,7 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
             {
                 DepthChainType.Near => s_BaseResNear,
                 DepthChainType.Far => s_BaseResFar,
+                DepthChainType.Jittered => s_BaseResJittered,
                 _ => Vector2Int.zero
             };
         }
@@ -159,6 +173,7 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
             {
                 case DepthChainType.Near: s_BaseResNear = res; break;
                 case DepthChainType.Far: s_BaseResFar = res; break;
+                case DepthChainType.Jittered: s_BaseResJittered = res; break;
             }
         }
 
@@ -175,6 +190,9 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
                     break;
                 case DepthChainType.Far:
                     EnsureMipCount(ref s_ChainFar, count, FarDirty, force);
+                    break;
+                case DepthChainType.Jittered:
+                    EnsureMipCount(ref s_ChainJittered, count, JitteredDirty, force);
                     break;
             }
         }
@@ -193,6 +211,9 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
                     break;
                 case DepthChainType.Far:
                     ResetChainData(ref s_ChainFar, FarDirty);
+                    break;
+                case DepthChainType.Jittered:
+                    ResetChainData(ref s_ChainJittered, JitteredDirty);
                     break;
             }
         }
@@ -231,6 +252,7 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
             {
                 DepthChainType.Near => s_ChainNear.Mips,
                 DepthChainType.Far => s_ChainFar.Mips,
+                DepthChainType.Jittered => s_ChainJittered.Mips,
                 _ => throw new ArgumentOutOfRangeException(nameof(type), "Unsupported depth chain type.")
             };
         }
@@ -282,7 +304,7 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
         {
             if (type == DepthChainType.Near) return ref s_ChainNear;
             if (type == DepthChainType.Far) return ref s_ChainFar;
-
+            if (type == DepthChainType.Jittered) return ref s_ChainJittered;
             throw new ArgumentOutOfRangeException(nameof(type), "Cannot return ref to invalid chain type.");
         }
 
@@ -301,6 +323,9 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
                     break;
                 case DepthChainType.Far:
                     GenerateChainMeta(type, baseRes, FarDirty);
+                    break;
+                case DepthChainType.Jittered:
+                    GenerateChainMeta(type, baseRes, JitteredDirty);
                     break;
             }
         }
@@ -384,6 +409,9 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
                     break;
                 case DepthChainType.Far:
                     BindChain(ref s_ChainFar, handleChain, setGlobal);
+                    break;
+                case DepthChainType.Jittered:
+                    BindChain(ref s_ChainJittered, handleChain, setGlobal);
                     break;
             }
         }

@@ -2,6 +2,10 @@
 #pragma kernel Copy
 #pragma kernel DownsampleMin
 #pragma kernel DownsampleMax
+#pragma kernel DownsampleJittered
+
+#include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
+#include "Packages/com.rayforge.core/Runtime/ShaderLibrary/Noise/BlueNoise/BlueNoise.hlsl"
 
 /** Source depth texture (previous mip level). */
 Texture2D<float> _Source;
@@ -83,4 +87,19 @@ void DownsampleMax(uint3 id : SV_DispatchThreadID)
 
     float4 samples = GatherSamples(id.xy);
     _Dest[id.xy] = max(max(samples.x, samples.y), max(samples.z, samples.w));
+}
+
+/**
+ * @brief Downsamples by taking a jittered average of 4 samples.
+ * Used for the "Jittered" chain (for anti-aliasing depth).
+ */
+[numthreads(8, 8, 1)]
+void DownsampleJittered(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= _DestRes.x || id.y >= _DestRes.y)
+        return;
+
+    float4 samples = GatherSamples(id.xy);
+    float noise = SampleBlueNoiseTimeOffset(float2(id.xy), _ScreenParams.zw);
+    _Dest[id.xy] = samples[noise * 3];
 }

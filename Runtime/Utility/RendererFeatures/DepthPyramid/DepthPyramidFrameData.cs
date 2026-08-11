@@ -25,6 +25,12 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
         public TextureHandleMeta<TextureHandle>[] farMips = new TextureHandleMeta<TextureHandle>[DepthPyramidProvider.MipCountMax];
 
         /// <summary>
+        /// Metadata for the Jittered depth chain (with TAA jitter applied).
+        /// Used for temporal antialiasing and jittered sampling techniques.
+        /// </summary>
+        public TextureHandleMeta<TextureHandle>[] jitteredMips = new TextureHandleMeta<TextureHandle>[DepthPyramidProvider.MipCountMax];
+
+        /// <summary>
         /// The depth history from the PREVIOUS frame.
         /// Used for temporal effects, reprojection, and temporal stability.
         /// </summary>

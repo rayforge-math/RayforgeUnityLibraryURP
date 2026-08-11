@@ -1,4 +1,5 @@
-﻿using Rayforge.Core.Rendering.Helpers;
+﻿using Rayforge.Core.Execution.Handler;
+using Rayforge.Core.Rendering.Helpers;
 using Rayforge.Core.Rendering.Passes;
 using Rayforge.Core.Utility.RenderGraphs.Collections;
 using Rayforge.Core.Utility.RenderGraphs.Helpers;
@@ -9,6 +10,7 @@ using UnityEngine.Rendering;
 using UnityEngine.Rendering.RenderGraphModule;
 using UnityEngine.Rendering.RenderGraphModule.Util;
 using UnityEngine.Rendering.Universal;
+using static Rayforge.Core.Utility.RenderGraphs.Collections.HistoryRTHandles;
 
 namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
 {
@@ -47,10 +49,12 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
 
         private bool m_RenderFarMips = false;
         private bool m_RenderNearMips = false;
+        private bool m_RenderJitteredMips = false;
         private bool m_RenderHistory = false;
 
         private readonly UnsafeRTHandleMipChain m_FarHandles;
         private readonly UnsafeRTHandleMipChain m_NearHandles;
+        private readonly UnsafeRTHandleMipChain m_JitteredHandles;
         private HistoryRTHandles m_HistoryHandles;
 
         private RenderTextureDescriptor m_Descriptor;
@@ -61,11 +65,13 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
 
         private PassMeta m_KernelMin;
         private PassMeta m_KernelMax;
+        private PassMeta m_KernelJittered;
         private int k_CopyKernelId;
 
         private const string k_CopyKernel = "Copy";
         private const string k_DownsampleMinKernel = "DownsampleMin";
         private const string k_DownsampleMaxKernel = "DownsampleMax";
+        private const string k_DownsampleJitteredKernel = "DownsampleJittered";
 
         private struct PassMeta
         {
@@ -93,14 +99,18 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
                 meta = new ComputePassMeta(shader, k_DownsampleMaxKernel),
                 name = k_DownsampleMaxKernel
             };
+            m_KernelJittered = new PassMeta
+            {
+                meta = new ComputePassMeta(shader, k_DownsampleJitteredKernel),
+                name = k_DownsampleJitteredKernel
+            };
             m_Descriptor = DefaultDescriptors.DepthBufferFullScreen();
 
             // Initialize all chains
             m_FarHandles = CreateChain();
             m_NearHandles = CreateChain();
-            m_HistoryHandles = new HistoryRTHandles(
-                (ref RTHandle handle, RenderTextureDescriptor desc, string name) => RenderingUtils.ReAllocateHandleIfNeeded(ref handle, desc, FilterMode.Point, TextureWrapMode.Clamp),
-                null, null);
+            m_JitteredHandles = CreateChain();
+            m_HistoryHandles = new HistoryRTHandles(null, null);
         }
 
         private UnsafeRTHandleMipChain CreateChain() => new UnsafeRTHandleMipChain(
@@ -112,6 +122,7 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
         {
             m_FarHandles.Dispose();
             m_NearHandles.Dispose();
+            m_JitteredHandles.Dispose();
             m_HistoryHandles.Dispose();
         }
 
@@ -164,6 +175,12 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
             bool isRequested = DepthPyramidProvider.IsHistoryRequested;
             bool anyChainActive = m_RenderFarMips || m_RenderNearMips;
 
+            var handler = new FuncHandler<RTAllocData, bool>(
+                static (allocData) =>
+                {
+                    return RenderingUtils.ReAllocateHandleIfNeeded(ref allocData.Handle, allocData.descriptor, FilterMode.Point, TextureWrapMode.Clamp);
+                });
+
             if (!isRequested && !anyChainActive)
             {
                 m_HistoryHandles.Dispose();
@@ -172,14 +189,14 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
 
             if (!isRequested)
             {
-                m_HistoryHandles.ReAllocateTargetIfNeeded(m_Descriptor);
+                m_HistoryHandles.ReAllocateTargetIfNeeded(m_Descriptor, ref handler);
                 m_HistoryHandles.DisposeHistory();
                 return false;
             }
 
             if (isRequested)
             {
-                m_HistoryHandles.ReAllocateHandlesIfNeeded(m_Descriptor);
+                m_HistoryHandles.ReAllocateHandlesIfNeeded(m_Descriptor, ref handler);
                 DepthPyramidProvider.GenerateHistoryMeta(baseRes);
                 return true;
             }
@@ -207,13 +224,15 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
                 m_RenderFarMips = UpdateDepthChain(m_FarHandles, DepthChainType.Far, baseRes, descChanged);
             if (DepthPyramidProvider.IsDirty(DepthChainType.Near) || descChanged)
                 m_RenderNearMips = UpdateDepthChain(m_NearHandles, DepthChainType.Near, baseRes, descChanged);
+            if (DepthPyramidProvider.IsDirty(DepthChainType.Jittered) || descChanged)
+                m_RenderJitteredMips = UpdateDepthChain(m_JitteredHandles, DepthChainType.Jittered, baseRes, descChanged);
 
             if (DepthPyramidProvider.IsAnyDirty || descChanged)
                 m_RenderHistory = UpdateHistory(baseRes, descChanged);
 
             DepthPyramidProvider.ResetDirty();
 
-            if (!(m_RenderFarMips || m_RenderNearMips || m_RenderHistory))
+            if (!(m_RenderFarMips || m_RenderNearMips || m_RenderJitteredMips || m_RenderHistory))
                 return;
 
             if (m_RenderHistory)
@@ -246,11 +265,22 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
                 m_NearHandles.SetHandleUnsafe(0, RTmip0);
                 RecordChain(renderGraph, m_NearHandles, DepthChainType.Near, nearKernel, baseRes, depthData.nearMips);
             }
+            if (m_RenderJitteredMips)
+            {
+                m_JitteredHandles.SetHandleUnsafe(0, RTmip0);
+                RecordChain(renderGraph, m_JitteredHandles, DepthChainType.Jittered, m_KernelJittered, baseRes, depthData.jitteredMips);
+            }
 
 #if UNITY_EDITOR
             if (m_DebugChainType != DepthChainType.None)
             {
-                var debugChain = m_DebugChainType == DepthChainType.Far ? depthData.farMips : depthData.nearMips;
+                var debugChain = m_DebugChainType switch
+                {
+                    DepthChainType.Far => depthData.farMips,
+                    DepthChainType.Jittered => depthData.jitteredMips,
+                    _ => depthData.nearMips
+                };
+
                 if (m_DebugMipLevel < debugChain.Length)
                 {
                     TextureHandle debugHandle = debugChain[m_DebugMipLevel].Handle;
