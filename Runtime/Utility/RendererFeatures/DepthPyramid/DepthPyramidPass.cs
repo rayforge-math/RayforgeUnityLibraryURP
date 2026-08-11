@@ -1,4 +1,7 @@
-﻿using Rayforge.Core.Execution.Handler;
+﻿using Rayforge.Core.Execution.Abstractions;
+using Rayforge.Core.Execution.Handler;
+using Rayforge.Core.Rendering.Collections;
+using Rayforge.Core.Rendering.Collections.Helpers;
 using Rayforge.Core.Rendering.Helpers;
 using Rayforge.Core.Rendering.Passes;
 using Rayforge.Core.Utility.RenderGraphs.Collections;
@@ -37,6 +40,17 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
             public override void CopyUserData(CopyPassData other)
             {
                 destRes = other.destRes;
+            }
+        }
+
+        /// <summary>
+        /// Zero-allocation struct handler for creating and reallocating depth mip handles.
+        /// </summary>
+        private readonly struct DepthMipCreateHandler : IFunctionHandler<MipCreateContext<RTHandle>, bool>
+        {
+            public bool Execute(MipCreateContext<RTHandle> context)
+            {
+                return RenderingUtils.ReAllocateHandleIfNeeded(ref context.Handle, context.Descriptor, FilterMode.Point, TextureWrapMode.Clamp);
             }
         }
 
@@ -106,17 +120,12 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
             };
             m_Descriptor = DefaultDescriptors.DepthBufferFullScreen();
 
-            // Initialize all chains
-            m_FarHandles = CreateChain();
-            m_NearHandles = CreateChain();
-            m_JitteredHandles = CreateChain();
+            // Initialize all chains using the parameterless constructor
+            m_FarHandles = new UnsafeRTHandleMipChain();
+            m_NearHandles = new UnsafeRTHandleMipChain();
+            m_JitteredHandles = new UnsafeRTHandleMipChain();
             m_HistoryHandles = new HistoryRTHandles(null, null);
         }
-
-        private UnsafeRTHandleMipChain CreateChain() => new UnsafeRTHandleMipChain(
-            (ref RTHandle handle, RenderTextureDescriptor desc, int mip) => RenderingUtils.ReAllocateHandleIfNeeded(ref handle, desc, FilterMode.Point, TextureWrapMode.Clamp),
-            (ref RTHandle handle) => { RTHandles.Release(handle); }
-        );
 
         public void Dispose()
         {
@@ -157,7 +166,8 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
             {
                 if (requestedCount > 0)
                 {
-                    chain.CreateUnsafe(m_Descriptor, 1, requestedCount - 1, true);
+                    var handler = new DepthMipCreateHandler();
+                    chain.CreateUnsafe(m_Descriptor, 1, requestedCount - 1, true, ref handler);
                 }
                 else
                 {
