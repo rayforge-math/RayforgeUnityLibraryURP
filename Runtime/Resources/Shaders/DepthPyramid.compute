@@ -100,6 +100,7 @@ void DownsampleJittered(uint3 id : SV_DispatchThreadID)
         return;
 
     float4 samples = GatherSamples(id.xy);
-    float noise = SampleBlueNoiseTimeOffset(float2(id.xy), _ScreenParams.zw);
-    _Dest[id.xy] = samples[noise * 3];
+    float2 screenUV = (float2) id.xy / _DestRes.xy;
+    float noise = SampleBlueNoiseTimeOffset(screenUV, _DestRes.xy);
+    _Dest[id.xy] = samples[int(noise * 3)];
 }

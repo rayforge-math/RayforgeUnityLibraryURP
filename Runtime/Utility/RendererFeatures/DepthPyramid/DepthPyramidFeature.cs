@@ -24,6 +24,9 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
         [Range(0, MipCountMax), SerializeField, InspectorName("Far Mips")]
         private int m_FarMipCount = -1;
 
+        [Range(0, MipCountMax), SerializeField, InspectorName("Jittered Mips")]
+        private int m_JitteredMipCount = -1;
+
 #if UNITY_EDITOR
         [Header("Debug")]
 
@@ -51,6 +54,7 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
         {
             m_NearMipCount = DepthPyramidProvider.GetRequestedCount(DepthChainType.Near);
             m_FarMipCount = DepthPyramidProvider.GetRequestedCount(DepthChainType.Far);
+            m_JitteredMipCount = DepthPyramidProvider.GetRequestedCount(DepthChainType.Jittered);
         }
 
         private void UdpateMipLevel()
@@ -59,6 +63,7 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
             {
                 DepthChainType.Near => m_NearMipCount,
                 DepthChainType.Far => m_FarMipCount,
+                DepthChainType.Jittered => m_JitteredMipCount,
                 _ => 1
             };
             mipLevel = Math.Clamp(mipLevel, 0, Math.Max(0, activeMax - 1));
