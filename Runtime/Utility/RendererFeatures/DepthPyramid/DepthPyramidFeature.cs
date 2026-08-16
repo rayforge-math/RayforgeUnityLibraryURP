@@ -31,7 +31,7 @@ namespace Rayforge.URP.Utility.RendererFeatures.DepthPyramid
         [Header("Debug")]
 
         [Tooltip("Which chain type to visualize.")]
-        public DepthChainType debugChainType = DepthChainType.Near;
+        public DepthChainType debugChainType = DepthChainType.None;
 
         [Range(0, MipCountMax - 1)]
         [Tooltip("Which mip level of the selected chain to display.")]
